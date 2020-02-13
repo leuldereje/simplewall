@@ -1,5 +1,5 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #include "global.hpp"
 
@@ -7,9 +7,14 @@ HFONT hfont_title = nullptr;
 HFONT hfont_link = nullptr;
 HFONT hfont_text = nullptr;
 
+void _app_notifycreatewindow (HWND hwnd)
+{
+	config.hnotification = CreateDialog (app.GetHINSTANCE (), MAKEINTRESOURCE (IDD_NOTIFICATION), hwnd, &NotificationProc);
+}
+
 bool _app_notifycommand (HWND hwnd, INT button_id, time_t seconds)
 {
-	size_t app_hash = _app_notifyget_id (hwnd, 0);
+	const size_t app_hash = _app_notifyget_id (hwnd, false);
 	PR_OBJECT ptr_app_object = _app_getappitem (app_hash);
 
 	if (!ptr_app_object)
@@ -63,10 +68,9 @@ bool _app_notifycommand (HWND hwnd, INT button_id, time_t seconds)
 	ptr_app->last_notify = _r_unixtime_now ();
 
 	_wfp_create3filters (_wfp_getenginehandle (), rules, __LINE__);
+	_app_freeobjects_vec (rules);
 
-	_r_obj_dereference (ptr_app_object);
-
-	_app_refreshstatus (app.GetHWND ());
+	_app_refreshstatus (app.GetHWND (), listview_id);
 	_app_profile_save ();
 
 	if (listview_id && _app_gettab_id (app.GetHWND ()) == listview_id)
@@ -80,7 +84,7 @@ bool _app_notifycommand (HWND hwnd, INT button_id, time_t seconds)
 
 bool _app_notifyadd (HWND hwnd, PR_OBJECT ptr_log_object, PITEM_APP ptr_app)
 {
-	if (!ptr_app || ptr_app->pnotification || !ptr_log_object)
+	if (!ptr_app || !ptr_log_object)
 	{
 		_r_obj_dereference (ptr_log_object);
 		return false;
@@ -111,28 +115,25 @@ bool _app_notifyadd (HWND hwnd, PR_OBJECT ptr_log_object, PITEM_APP ptr_app)
 
 	// remove existing log item (if exists)
 	if (ptr_app->pnotification)
+	{
 		_r_obj_dereference (ptr_app->pnotification);
+		ptr_app->pnotification = nullptr;
+	}
 
 	ptr_app->pnotification = ptr_log_object;
 
 	if (app.ConfigGet (L"IsNotificationsSound", true).AsBool ())
 		_app_notifyplaysound ();
 
-	if (!_r_wnd_undercursor (hwnd))
+	if (!_r_wnd_isundercursor (hwnd))
 		_app_notifyshow (hwnd, ptr_log_object, true, true);
 
 	return true;
 }
 
-void _app_freenotify (size_t app_hash, PITEM_APP ptr_app, bool is_refresh)
+void _app_freenotify (size_t app_hash, PITEM_APP ptr_app)
 {
 	const HWND hwnd = config.hnotification;
-
-	if (app_hash == _app_notifyget_id (hwnd, 0))
-	{
-		SetWindowLongPtr (hwnd, GWLP_USERDATA, 0); // required temp
-		SetWindowLongPtr (hwnd, GWLP_USERDATA, _app_notifyget_id (hwnd, INVALID_SIZE_T));
-	}
 
 	if (ptr_app)
 	{
@@ -140,18 +141,20 @@ void _app_freenotify (size_t app_hash, PITEM_APP ptr_app, bool is_refresh)
 		{
 			_r_obj_dereference (ptr_app->pnotification);
 			ptr_app->pnotification = nullptr;
-
-			if (is_refresh)
-				_app_notifyrefresh (hwnd, true);
 		}
 	}
+
+	if (_app_notifyget_id (hwnd, false) == app_hash)
+		_app_notifyget_id (hwnd, true);
+
+	_app_notifyrefresh (hwnd, true);
 }
 
-size_t _app_notifyget_id (HWND hwnd, size_t current_id)
+size_t _app_notifyget_id (HWND hwnd, bool is_nearest)
 {
 	const size_t app_hash_current = (size_t)GetWindowLongPtr (hwnd, GWLP_USERDATA);
 
-	if (current_id == INVALID_SIZE_T)
+	if (is_nearest)
 	{
 		for (auto &p : apps)
 		{
@@ -168,12 +171,15 @@ size_t _app_notifyget_id (HWND hwnd, size_t current_id)
 			if (ptr_app && ptr_app->pnotification)
 			{
 				_r_obj_dereference (ptr_app_object);
+
+				SetWindowLongPtr (hwnd, GWLP_USERDATA, (LONG_PTR)p.first);
 				return p.first;
 			}
 
 			_r_obj_dereference (ptr_app_object);
 		}
 
+		SetWindowLongPtr (hwnd, GWLP_USERDATA, 0);
 		return 0;
 	}
 
@@ -196,6 +202,8 @@ PR_OBJECT _app_notifyget_obj (size_t app_hash)
 
 			return ptr_log_object;
 		}
+
+		_r_obj_dereference (ptr_app_object);
 	}
 
 	return nullptr;
@@ -256,30 +264,25 @@ bool _app_notifyshow (HWND hwnd, PR_OBJECT ptr_log_object, bool is_forced, bool 
 
 	SetWindowText (hwnd, _r_fmt (L"%s - " APP_NAME, app.LocaleString (IDS_NOTIFY_TITLE, nullptr).GetString ()));
 
-	// print table text
-	{
-		const HDC hdc = GetDC (hwnd);
-
-		const bool is_inbound = (ptr_log->direction == FWP_DIRECTION_INBOUND);
-
-		_r_ctrl_settabletext (hdc, hwnd, IDC_FILE_ID, app.LocaleString (IDS_NAME, L":"), IDC_FILE_TEXT, !_r_str_isempty (ptr_app->display_name) ? _r_path_getfilename (ptr_app->display_name) : empty_text);
-		_r_ctrl_settabletext (hdc, hwnd, IDC_SIGNATURE_ID, app.LocaleString (IDS_SIGNATURE, L":"), IDC_SIGNATURE_TEXT, is_signed.IsEmpty () ? empty_text : is_signed);
-		_r_ctrl_settabletext (hdc, hwnd, IDC_ADDRESS_ID, app.LocaleString (IDS_ADDRESS, L":"), IDC_ADDRESS_TEXT, !_r_str_isempty (ptr_log->remote_fmt) ? ptr_log->remote_fmt : empty_text);
-		_r_ctrl_settabletext (hdc, hwnd, IDC_PORT_ID, app.LocaleString (IDS_PORT, L":"), IDC_PORT_TEXT, _app_formatport (ptr_log->remote_port, empty_text).GetString ());
-		_r_ctrl_settabletext (hdc, hwnd, IDC_DIRECTION_ID, app.LocaleString (IDS_DIRECTION, L":"), IDC_DIRECTION_TEXT, app.LocaleString (is_inbound ? IDS_DIRECTION_2 : IDS_DIRECTION_1, ptr_log->is_loopback ? L" (Loopback)" : nullptr));
-		_r_ctrl_settabletext (hdc, hwnd, IDC_FILTER_ID, app.LocaleString (IDS_FILTER, L":"), IDC_FILTER_TEXT, !_r_str_isempty (ptr_log->filter_name) ? ptr_log->filter_name : empty_text);
-		_r_ctrl_settabletext (hdc, hwnd, IDC_DATE_ID, app.LocaleString (IDS_DATE, L":"), IDC_DATE_TEXT, _r_fmt_date (ptr_log->date, FDTF_SHORTDATE | FDTF_LONGTIME));
-
-		ReleaseDC (hwnd, hdc);
-	}
-
 	SetWindowLongPtr (hwnd, GWLP_USERDATA, (LONG_PTR)ptr_log->app_hash);
 	SetWindowLongPtr (GetDlgItem (hwnd, IDC_HEADER_ID), GWLP_USERDATA, (LONG_PTR)ptr_log->hicon);
+
+	// print table text
+	{
+		const bool is_inbound = (ptr_log->direction == FWP_DIRECTION_INBOUND);
+
+		_r_ctrl_settabletext (hwnd, IDC_FILE_ID, app.LocaleString (IDS_NAME, L":"), IDC_FILE_TEXT, !_r_str_isempty (ptr_app->display_name) ? _r_path_getfilename (ptr_app->display_name) : empty_text);
+		_r_ctrl_settabletext (hwnd, IDC_SIGNATURE_ID, app.LocaleString (IDS_SIGNATURE, L":"), IDC_SIGNATURE_TEXT, is_signed.IsEmpty () ? empty_text : is_signed);
+		_r_ctrl_settabletext (hwnd, IDC_ADDRESS_ID, app.LocaleString (IDS_ADDRESS, L":"), IDC_ADDRESS_TEXT, !_r_str_isempty (ptr_log->remote_fmt) ? ptr_log->remote_fmt : empty_text);
+		_r_ctrl_settabletext (hwnd, IDC_PORT_ID, app.LocaleString (IDS_PORT, L":"), IDC_PORT_TEXT, ptr_log->remote_port ? _app_formatport (ptr_log->remote_port, false).GetString () : empty_text);
+		_r_ctrl_settabletext (hwnd, IDC_DIRECTION_ID, app.LocaleString (IDS_DIRECTION, L":"), IDC_DIRECTION_TEXT, app.LocaleString (is_inbound ? IDS_DIRECTION_2 : IDS_DIRECTION_1, ptr_log->is_loopback ? L" (Loopback)" : nullptr));
+		_r_ctrl_settabletext (hwnd, IDC_FILTER_ID, app.LocaleString (IDS_FILTER, L":"), IDC_FILTER_TEXT, !_r_str_isempty (ptr_log->filter_name) ? ptr_log->filter_name : empty_text);
+		_r_ctrl_settabletext (hwnd, IDC_DATE_ID, app.LocaleString (IDS_DATE, L":"), IDC_DATE_TEXT, _r_fmt_date (ptr_log->date, FDTF_SHORTDATE | FDTF_LONGTIME));
+	}
 
 	_r_ctrl_settext (hwnd, IDC_RULES_BTN, app.LocaleString (IDS_TRAY_RULES, nullptr));
 	_r_ctrl_settext (hwnd, IDC_ALLOW_BTN, app.LocaleString (IDS_ACTION_ALLOW, nullptr));
 	_r_ctrl_settext (hwnd, IDC_BLOCK_BTN, app.LocaleString (IDS_ACTION_BLOCK, nullptr));
-	_r_ctrl_settext (hwnd, IDC_LATER_BTN, L">");
 
 	_r_ctrl_enable (hwnd, IDC_RULES_BTN, !is_safety);
 	_r_ctrl_enable (hwnd, IDC_ALLOW_BTN, !is_safety);
@@ -295,12 +298,23 @@ bool _app_notifyshow (HWND hwnd, PR_OBJECT ptr_log_object, bool is_forced, bool 
 	_app_notifysetpos (hwnd, false);
 
 	// prevent fullscreen apps lose focus
-	if (is_forced && _r_wnd_isfullscreenmode ())
+	const bool is_fullscreenmode = _r_wnd_isfullscreenmode ();
+
+	if (is_forced && is_fullscreenmode)
 		is_forced = false;
 
-	RedrawWindow (GetDlgItem (hwnd, IDC_HEADER_ID), nullptr, nullptr, RDW_NOFRAME | RDW_NOINTERNALPAINT | RDW_ERASE | RDW_INVALIDATE);
+	RedrawWindow (GetDlgItem (hwnd, IDC_HEADER_ID), nullptr, nullptr, RDW_NOFRAME | RDW_ERASE | RDW_INVALIDATE);
+	InvalidateRect (hwnd, nullptr, TRUE);
+
+	_r_wnd_top (hwnd, !is_fullscreenmode);
 
 	ShowWindow (hwnd, is_forced ? SW_SHOW : SW_SHOWNA);
+
+	if (is_forced && !is_fullscreenmode)
+	{
+		SetForegroundWindow (hwnd);
+		SetFocus (hwnd);
+	}
 
 	return true;
 }
@@ -346,8 +360,8 @@ void _app_notifyplaysound ()
 		result = true;
 	}
 
-	if (!result || !_r_fs_exists (notify_snd_path) || !PlaySound (notify_snd_path, nullptr, SND_FILENAME | SND_ASYNC))
-		PlaySound (NOTIFY_SOUND_NAME, nullptr, SND_ASYNC);
+	if (!result || !_r_fs_exists (notify_snd_path) || !PlaySound (notify_snd_path, nullptr, SND_ASYNC | SND_NODEFAULT | SND_FILENAME | SND_SENTRY))
+		PlaySound (NOTIFY_SOUND_NAME, nullptr, SND_ASYNC | SND_NODEFAULT | SND_SENTRY);
 }
 
 void _app_notifyrefresh (HWND hwnd, bool is_safety)
@@ -358,7 +372,7 @@ void _app_notifyrefresh (HWND hwnd, bool is_safety)
 		return;
 	}
 
-	PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, 0));
+	PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, false));
 
 	if (!ptr_log_object)
 	{
@@ -379,8 +393,7 @@ void _app_notifysetpos (HWND hwnd, bool is_forced)
 		GetWindowRect (hwnd, &windowRect);
 
 		_r_wnd_adjustwindowrect (hwnd, &windowRect);
-
-		SetWindowPos (hwnd, nullptr, windowRect.left, windowRect.top, 0, 0, SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSIZE);
+		SetWindowPos (hwnd, nullptr, windowRect.left, windowRect.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 
 		return;
 	}
@@ -395,43 +408,41 @@ void _app_notifysetpos (HWND hwnd, bool is_forced)
 		RECT desktopRect = {0};
 		SystemParametersInfo (SPI_GETWORKAREA, 0, &desktopRect, 0);
 
-		APPBARDATA appbar = {0};
+		APPBARDATA abd = {0};
 
-		appbar.cbSize = sizeof (appbar);
-		appbar.hWnd = FindWindow (L"Shell_TrayWnd", nullptr);
+		abd.cbSize = sizeof (abd);
 
-		SHAppBarMessage (ABM_GETTASKBARPOS, &appbar);
-
-		const INT border_x = GetSystemMetrics (SM_CXBORDER);
-		const INT border_y = GetSystemMetrics (SM_CYBORDER);
-
-		if (appbar.uEdge == ABE_LEFT)
+		if (SHAppBarMessage (ABM_GETTASKBARPOS, &abd))
 		{
-			windowRect.left = appbar.rc.right + border_x;
-			windowRect.top = (desktopRect.bottom - _R_RECT_HEIGHT (&windowRect)) - border_y;
-		}
-		else if (appbar.uEdge == ABE_TOP)
-		{
-			windowRect.left = (desktopRect.right - _R_RECT_WIDTH (&windowRect)) - border_x;
-			windowRect.top = appbar.rc.bottom + border_y;
-		}
-		else if (appbar.uEdge == ABE_RIGHT)
-		{
-			windowRect.left = (desktopRect.right - _R_RECT_WIDTH (&windowRect)) - border_x;
-			windowRect.top = (desktopRect.bottom - _R_RECT_HEIGHT (&windowRect)) - border_y;
-		}
-		else/* if (appbar.uEdge == ABE_BOTTOM)*/
-		{
-			windowRect.left = (desktopRect.right - (windowRect.right - windowRect.left)) - border_x;
-			windowRect.top = (desktopRect.bottom - _R_RECT_HEIGHT (&windowRect)) - border_y;
-		}
+			const INT border_x = _r_dc_getsystemmetrics (hwnd, SM_CXBORDER);
 
-		SetWindowPos (hwnd, nullptr, windowRect.left, windowRect.top, 0, 0, SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOSIZE);
+			if (abd.uEdge == ABE_LEFT)
+			{
+				windowRect.left = abd.rc.right + border_x;
+				windowRect.top = (desktopRect.bottom - _R_RECT_HEIGHT (&windowRect)) - border_x;
+			}
+			else if (abd.uEdge == ABE_TOP)
+			{
+				windowRect.left = (desktopRect.right - _R_RECT_WIDTH (&windowRect)) - border_x;
+				windowRect.top = abd.rc.bottom + border_x;
+			}
+			else if (abd.uEdge == ABE_RIGHT)
+			{
+				windowRect.left = (desktopRect.right - _R_RECT_WIDTH (&windowRect)) - border_x;
+				windowRect.top = (desktopRect.bottom - _R_RECT_HEIGHT (&windowRect)) - border_x;
+			}
+			else/* if (appbar.uEdge == ABE_BOTTOM)*/
+			{
+				windowRect.left = (desktopRect.right - (windowRect.right - windowRect.left)) - border_x;
+				windowRect.top = (desktopRect.bottom - _R_RECT_HEIGHT (&windowRect)) - border_x;
+			}
+
+			SetWindowPos (hwnd, nullptr, windowRect.left, windowRect.top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+			return;
+		}
 	}
-	else
-	{
-		_r_wnd_center (hwnd, nullptr);
-	}
+
+	_r_wnd_center (hwnd, nullptr); // display window on center (depends on error, config etc...)
 }
 
 HFONT _app_notifyfontinit (HWND hwnd, PLOGFONT plf, LONG height, LONG weight, LPCWSTR name, BYTE is_underline)
@@ -445,7 +456,7 @@ HFONT _app_notifyfontinit (HWND hwnd, PLOGFONT plf, LONG height, LONG weight, LP
 	plf->lfCharSet = DEFAULT_CHARSET;
 	plf->lfQuality = DEFAULT_QUALITY;
 
-	if (name)
+	if (!_r_str_isempty (name))
 		_r_str_copy (plf->lfFaceName, LF_FACESIZE, name);
 
 	return CreateFontIndirect (plf);
@@ -453,8 +464,8 @@ HFONT _app_notifyfontinit (HWND hwnd, PLOGFONT plf, LONG height, LONG weight, LP
 
 void _app_notifyfontset (HWND hwnd)
 {
-	SendMessage (hwnd, WM_SETICON, ICON_SMALL, (LPARAM)app.GetSharedImage (nullptr, SIH_EXCLAMATION, _r_dc_getdpi (hwnd, _R_SIZE_ICON16)));
-	SendMessage (hwnd, WM_SETICON, ICON_BIG, (LPARAM)app.GetSharedImage (nullptr, SIH_EXCLAMATION, _r_dc_getdpi (hwnd, _R_SIZE_ICON32)));
+	SendMessage (hwnd, WM_SETICON, ICON_SMALL, (LPARAM)app.GetSharedImage (nullptr, SIH_EXCLAMATION, _r_dc_getsystemmetrics (hwnd, SM_CXSMICON)));
+	SendMessage (hwnd, WM_SETICON, ICON_BIG, (LPARAM)app.GetSharedImage (nullptr, SIH_EXCLAMATION, _r_dc_getsystemmetrics (hwnd, SM_CXICON)));
 
 	const INT title_font_height = 12;
 	const INT text_font_height = 9;
@@ -468,7 +479,7 @@ void _app_notifyfontset (HWND hwnd)
 		SAFE_DELETE_OBJECT (hfont_link);
 		SAFE_DELETE_OBJECT (hfont_text);
 
-		hfont_title = _app_notifyfontinit (hwnd , &ncm.lfCaptionFont, title_font_height, FW_NORMAL, UI_FONT, FALSE);
+		hfont_title = _app_notifyfontinit (hwnd, &ncm.lfCaptionFont, title_font_height, FW_NORMAL, UI_FONT, FALSE);
 		hfont_link = _app_notifyfontinit (hwnd, &ncm.lfMessageFont, text_font_height, FW_NORMAL, UI_FONT, TRUE);
 		hfont_text = _app_notifyfontinit (hwnd, &ncm.lfMessageFont, text_font_height, FW_NORMAL, UI_FONT, FALSE);
 
@@ -476,29 +487,27 @@ void _app_notifyfontset (HWND hwnd)
 		SendDlgItemMessage (hwnd, IDC_FILE_TEXT, WM_SETFONT, (WPARAM)hfont_link, TRUE);
 
 		for (INT i = IDC_SIGNATURE_TEXT; i <= IDC_DATE_TEXT; i++)
-		{
-			SendDlgItemMessage (hwnd, i, EM_SETMARGINS, EC_LEFTMARGIN, 0);
-			SendDlgItemMessage (hwnd, i, EM_SETMARGINS, EC_RIGHTMARGIN, 0);
-		}
+			SendDlgItemMessage (hwnd, i, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
 
 		for (INT i = IDC_SIGNATURE_TEXT; i <= IDC_LATER_BTN; i++)
 			SendDlgItemMessage (hwnd, i, WM_SETFONT, (WPARAM)hfont_text, TRUE);
-
-		// set button images
-		SendDlgItemMessage (hwnd, IDC_RULES_BTN, BM_SETIMAGE, IMAGE_BITMAP, (WPARAM)config.hbmp_rules);
-		SendDlgItemMessage (hwnd, IDC_ALLOW_BTN, BM_SETIMAGE, IMAGE_BITMAP, (WPARAM)config.hbmp_allow);
-		SendDlgItemMessage (hwnd, IDC_BLOCK_BTN, BM_SETIMAGE, IMAGE_BITMAP, (WPARAM)config.hbmp_block);
 	}
 
-	_r_wnd_addstyle (hwnd, IDC_RULES_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
-	_r_wnd_addstyle (hwnd, IDC_ALLOW_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
-	_r_wnd_addstyle (hwnd, IDC_BLOCK_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
-	_r_wnd_addstyle (hwnd, IDC_LATER_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
+	// set button images
+	SendDlgItemMessage (hwnd, IDC_RULES_BTN, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)config.hbmp_rules);
+	SendDlgItemMessage (hwnd, IDC_ALLOW_BTN, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)config.hbmp_allow);
+	SendDlgItemMessage (hwnd, IDC_BLOCK_BTN, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)config.hbmp_block);
+	SendDlgItemMessage (hwnd, IDC_LATER_BTN, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)config.hbmp_cross);
 
 	_r_ctrl_setbuttonmargins (hwnd, IDC_RULES_BTN);
 	_r_ctrl_setbuttonmargins (hwnd, IDC_ALLOW_BTN);
 	_r_ctrl_setbuttonmargins (hwnd, IDC_BLOCK_BTN);
 	_r_ctrl_setbuttonmargins (hwnd, IDC_LATER_BTN);
+
+	_r_wnd_addstyle (hwnd, IDC_RULES_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
+	_r_wnd_addstyle (hwnd, IDC_ALLOW_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
+	_r_wnd_addstyle (hwnd, IDC_BLOCK_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
+	_r_wnd_addstyle (hwnd, IDC_LATER_BTN, app.IsClassicUI () ? WS_EX_STATICEDGE : 0, WS_EX_STATICEDGE, GWL_EXSTYLE);
 
 	InvalidateRect (hwnd, nullptr, TRUE);
 }
@@ -531,9 +540,9 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 	{
 		case WM_INITDIALOG:
 		{
-#ifndef _APP_NO_DARKTHEME
+#if !defined(_APP_NO_DARKTHEME)
 			_r_wnd_setdarktheme (hwnd);
-#endif // _APP_NO_DARKTHEME
+#endif // !_APP_NO_DARKTHEME
 
 			_app_notifyfontset (hwnd);
 
@@ -551,12 +560,42 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 			break;
 		}
 
+		case WM_NCCREATE:
+		{
+			_r_wnd_enablenonclientscaling (hwnd);
+			break;
+		}
+
+		case WM_DPICHANGED:
+		{
+			_app_notifyfontset (hwnd);
+			_app_notifyrefresh (hwnd, false);
+
+			break;
+		}
+
 		case WM_CLOSE:
 		{
 			_app_notifyhide (hwnd);
 
 			SetWindowLongPtr (hwnd, DWLP_MSGRESULT, TRUE);
 			return TRUE;
+		}
+
+		case WM_ACTIVATE:
+		{
+			switch (wparam)
+			{
+				case WA_ACTIVE:
+				case WA_CLICKACTIVE:
+				{
+					_r_wnd_top (hwnd, true);
+					SetActiveWindow (hwnd);
+					break;
+				}
+			}
+
+			break;
 		}
 
 		case WM_TIMER:
@@ -574,39 +613,44 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 			break;
 		}
 
-#ifndef _APP_NO_DARKTHEME
-		case WM_THEMECHANGED:
-		{
-			_r_wnd_setdarktheme (hwnd);
-			break;
-		}
-
 		case WM_SETTINGCHANGE:
 		{
-			if (_r_wnd_isdarkmessage (lparam))
-				SendMessage (hwnd, WM_THEMECHANGED, 0, 0);
-
+			_r_wnd_changesettings (hwnd, wparam, lparam);
 			break;
 		}
-#endif // _APP_NO_DARKTHEME
+
+		case WM_ERASEBKGND:
+		{
+			RECT rc = {0};
+			GetClientRect (hwnd, &rc);
+
+			_r_dc_fillrect ((HDC)wparam, &rc, GetSysColor (COLOR_WINDOW));
+
+			SetWindowLongPtr (hwnd, DWLP_MSGRESULT, TRUE);
+			return TRUE;
+		}
 
 		case WM_PAINT:
 		{
 			PAINTSTRUCT ps = {0};
 			HDC hdc = BeginPaint (hwnd, &ps);
 
-			RECT rc = {0};
-			GetClientRect (hwnd, &rc);
+			if (hdc)
+			{
+				RECT rc = {0};
+				GetClientRect (hwnd, &rc);
 
-			const INT wnd_height = _R_RECT_HEIGHT (&rc);
+				const INT wnd_width = _R_RECT_WIDTH (&rc);
+				const INT wnd_height = _R_RECT_HEIGHT (&rc);
 
-			SetRect (&rc, 0, wnd_height - _r_dc_getdpi (hwnd, _R_SIZE_FOOTERHEIGHT), _R_RECT_WIDTH (&rc), wnd_height);
-			_r_dc_fillrect (hdc, &rc, GetSysColor (COLOR_3DFACE));
+				SetRect (&rc, 0, wnd_height - _r_dc_getdpi (hwnd, _R_SIZE_FOOTERHEIGHT), wnd_width, wnd_height);
+				_r_dc_fillrect (hdc, &rc, GetSysColor (COLOR_3DFACE));
 
-			for (INT i = 0; i < _R_RECT_WIDTH (&rc); i++)
-				SetPixel (hdc, i, rc.top, GetSysColor (COLOR_APPWORKSPACE));
+				for (INT i = 0; i < wnd_width; i++)
+					SetPixelV (hdc, i, rc.top, GetSysColor (COLOR_APPWORKSPACE));
 
-			EndPaint (hwnd, &ps);
+				EndPaint (hwnd, &ps);
+			}
 
 			break;
 		}
@@ -639,7 +683,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 			if (drawInfo->CtlID != IDC_HEADER_ID)
 				break;
 
-			const INT wnd_icon_size = _r_dc_getdpi (hwnd, _R_SIZE_ICON32);
+			const INT wnd_icon_size = _r_dc_getsystemmetrics (hwnd, SM_CXICON);
 			const INT wnd_spacing = _r_dc_getdpi (hwnd, 12);
 
 			RECT rcText = {0};
@@ -651,7 +695,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 			SetBkMode (drawInfo->hDC, TRANSPARENT);
 
 			// draw background
-			DrawGradient (drawInfo->hDC, &drawInfo->rcItem, NOTIFY_GRADIENT_1, NOTIFY_GRADIENT_2, GRADIENT_FILL_RECT_H);
+			DrawGradient (drawInfo->hDC, &drawInfo->rcItem, app.ConfigGet (L"NotificationBackground1", NOTIFY_GRADIENT_1).AsUlong (), app.ConfigGet (L"NotificationBackground2", NOTIFY_GRADIENT_2).AsUlong (), GRADIENT_FILL_RECT_H);
 
 			// draw title text
 			WCHAR text[128] = {0};
@@ -729,7 +773,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 					{
 						AppendMenu (hsubmenu, MF_STRING, IDM_DISABLENOTIFICATIONS, app.LocaleString (IDS_DISABLENOTIFICATIONS, nullptr));
 
-						_app_generate_rulesmenu (hsubmenu, _app_notifyget_id (hwnd, 0));
+						_app_generate_rulesmenu (hsubmenu, _app_notifyget_id (hwnd, false));
 					}
 					else if (nmlp->idFrom == IDC_ALLOW_BTN)
 					{
@@ -768,7 +812,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 					if (ctrl_id == IDC_FILE_TEXT)
 					{
-						PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, 0));
+						PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, false));
 
 						if (ptr_log_object)
 						{
@@ -813,7 +857,9 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 		case WM_COMMAND:
 		{
-			if ((LOWORD (wparam) >= IDX_RULES_SPECIAL && LOWORD (wparam) <= IDX_RULES_SPECIAL + rules_arr.size ()))
+			const INT ctrl_id = LOWORD (wparam);
+
+			if ((LOWORD (wparam) >= IDX_RULES_SPECIAL && LOWORD (wparam) <= INT (IDX_RULES_SPECIAL + rules_arr.size ())))
 			{
 				const size_t rule_idx = (LOWORD (wparam) - IDX_RULES_SPECIAL);
 				PR_OBJECT ptr_rule_object = _app_getrulebyid (rule_idx);
@@ -825,7 +871,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 				if (ptr_rule)
 				{
-					PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, 0));
+					PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, false));
 
 					if (ptr_log_object)
 					{
@@ -897,7 +943,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 											_r_listview_redraw (app.GetHWND (), listview_id);
 										}
 
-										_app_refreshstatus (app.GetHWND ());
+										_app_refreshstatus (app.GetHWND (), listview_id);
 										_app_profile_save ();
 									}
 
@@ -914,19 +960,19 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 				return FALSE;
 			}
-			else if ((LOWORD (wparam) >= IDX_TIMER && LOWORD (wparam) <= IDX_TIMER + timers.size ()))
+			else if ((ctrl_id >= IDX_TIMER && ctrl_id <= INT (IDX_TIMER + timers.size ())))
 			{
 				if (!_r_ctrl_isenabled (hwnd, IDC_ALLOW_BTN))
 					return FALSE;
 
-				const size_t timer_idx = (LOWORD (wparam) - IDX_TIMER);
+				const size_t timer_idx = (ctrl_id - IDX_TIMER);
 
 				_app_notifycommand (hwnd, IDC_ALLOW_BTN, timers.at (timer_idx));
 
 				return FALSE;
 			}
 
-			switch (LOWORD (wparam))
+			switch (ctrl_id)
 			{
 				case IDCANCEL: // process Esc key
 				{
@@ -936,7 +982,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 				case IDC_FILE_TEXT:
 				{
-					PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, 0));
+					PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, false));
 
 					if (ptr_log_object)
 					{
@@ -972,8 +1018,6 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 				case IDC_RULES_BTN:
 				{
-					const INT ctrl_id = LOWORD (wparam);
-
 					if (_r_ctrl_isenabled (hwnd, ctrl_id))
 					{
 						// HACK!!!
@@ -992,11 +1036,16 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 				case IDC_ALLOW_BTN:
 				case IDC_BLOCK_BTN:
 				case IDC_LATER_BTN:
+				{
+					if (_r_ctrl_isenabled (hwnd, ctrl_id))
+						_app_notifycommand (hwnd, ctrl_id, 0);
+
+					break;
+				}
+
 				case IDM_DISABLENOTIFICATIONS:
 				{
-					const INT ctrl_id = LOWORD (wparam);
-
-					if (_r_ctrl_isenabled (hwnd, ctrl_id))
+					if (_r_ctrl_isenabled (hwnd, IDC_RULES_BTN))
 						_app_notifycommand (hwnd, ctrl_id, 0);
 
 					break;
@@ -1016,7 +1065,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 					PR_OBJECT ptr_rule_object = _r_obj_allocate (ptr_rule, &_app_dereferencerule);
 
 					size_t app_hash = 0;
-					PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, 0));
+					PR_OBJECT ptr_log_object = _app_notifyget_obj (_app_notifyget_id (hwnd, false));
 
 					if (ptr_log_object)
 					{
@@ -1028,6 +1077,7 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 							ptr_rule->apps[app_hash] = true;
 							ptr_rule->protocol = ptr_log->protocol;
+							ptr_rule->direction = ptr_log->direction;
 
 							PR_OBJECT ptr_app_object = _app_getappitem (app_hash);
 
@@ -1045,8 +1095,10 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 							if (_app_formataddress (ptr_log->af, 0, &ptr_log->remote_addr, ptr_log->remote_port, &prule, FMTADDR_AS_RULE))
 							{
-								_r_str_alloc (&ptr_rule->pname, INVALID_SIZE_T, prule);
-								_r_str_alloc (&ptr_rule->prule_remote, INVALID_SIZE_T, prule);
+								size_t len = _r_str_length (prule);
+
+								_r_str_alloc (&ptr_rule->pname, len, prule);
+								_r_str_alloc (&ptr_rule->prule_remote, len, prule);
 							}
 
 							SAFE_DELETE_ARRAY (prule);
@@ -1067,12 +1119,12 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
 					if (DialogBoxParam (nullptr, MAKEINTRESOURCE (IDD_EDITOR), app.GetHWND (), &EditorProc, (LPARAM)ptr_rule_object))
 					{
-						_r_fastlock_acquireexclusive (&lock_access);
+						_r_fastlock_acquireshared (&lock_access);
 
 						const size_t rule_idx = rules_arr.size ();
 						rules_arr.push_back (ptr_rule_object);
 
-						_r_fastlock_releaseexclusive (&lock_access);
+						_r_fastlock_releaseshared (&lock_access);
 
 						const INT listview_id = _app_gettab_id (app.GetHWND ());
 
@@ -1128,12 +1180,39 @@ INT_PTR CALLBACK NotificationProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 							}
 						}
 
-						_app_refreshstatus (app.GetHWND ());
+						_app_refreshstatus (app.GetHWND (), listview_id);
 						_app_profile_save ();
 					}
 					else
 					{
 						_r_obj_dereference (ptr_rule_object);
+					}
+
+					break;
+				}
+
+				case IDM_COPY: // ctrl+c
+				case IDM_SELECT_ALL: // ctrl+a
+				{
+					const HWND hedit = GetFocus ();
+
+					if (hedit)
+					{
+						WCHAR class_name[64] = {0};
+
+						if (GetClassName (hedit, class_name, _countof (class_name)) > 0)
+						{
+							if (_r_str_compare (class_name, WC_EDIT) == 0)
+							{
+								// edit control hotkey for "ctrl+c" (issue #597)
+								if (ctrl_id == IDM_COPY)
+									SendMessage (hedit, WM_COPY, 0, 0);
+
+								// edit control hotkey for "ctrl+a"
+								else if (ctrl_id == IDM_SELECT_ALL)
+									SendMessage (hedit, EM_SETSEL, 0, (LPARAM)-1);
+							}
+						}
 					}
 
 					break;

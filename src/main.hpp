@@ -1,5 +1,5 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #pragma once
 
@@ -96,7 +96,6 @@ INT_PTR CALLBACK EditorProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 INT_PTR CALLBACK SettingsProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 // config
-#define WM_TRAYICON WM_APP + 1
 #define LANG_MENU 6
 #define UID 1984 // if you want to keep a secret, you must also hide it from yourself.
 
@@ -177,6 +176,7 @@ INT_PTR CALLBACK SettingsProc (HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
 
 #define NOTIFY_LIMIT_POOL_SIZE 128
 #define NOTIFY_LIMIT_THREAD_COUNT 2
+#define NOTIFY_LIMIT_THREAD_MAX 4
 
 // pugixml document configuration
 #define PUGIXML_LOAD_FLAGS (pugi::parse_escapes)
@@ -251,6 +251,7 @@ struct STATIC_DATA
 	HBITMAP hbmp_disable = nullptr;
 	HBITMAP hbmp_allow = nullptr;
 	HBITMAP hbmp_block = nullptr;
+	HBITMAP hbmp_cross = nullptr;
 	HBITMAP hbmp_rules = nullptr;
 	HBITMAP hbmp_checked = nullptr;
 	HBITMAP hbmp_unchecked = nullptr;
@@ -299,8 +300,6 @@ typedef struct tagITEM_APP
 		SAFE_DELETE_ARRAY (real_path);
 		SAFE_DELETE_ARRAY (original_path);
 
-		SAFE_DELETE_ARRAY (pdata);
-
 		_r_obj_dereference (pnotification);
 	}
 
@@ -311,7 +310,6 @@ typedef struct tagITEM_APP
 	LPWSTR real_path = nullptr;
 
 	PR_OBJECT pnotification = nullptr;
-	PBYTE pdata = nullptr; // service - PSECURITY_DESCRIPTOR / uwp - PSID (win8+)
 
 	HANDLE htimer = nullptr;
 
@@ -350,7 +348,7 @@ typedef struct tagITEM_APP_HELPER
 		SAFE_DELETE_ARRAY (real_path);
 		SAFE_DELETE_ARRAY (internal_name);
 
-		SAFE_LOCAL_FREE (pdata);
+		SAFE_DELETE_ARRAY (pdata);
 	}
 
 	time_t timestamp = 0;
@@ -361,7 +359,7 @@ typedef struct tagITEM_APP_HELPER
 	LPWSTR real_path = nullptr;
 	LPWSTR internal_name = nullptr;
 
-	PVOID pdata = nullptr; // service - PSECURITY_DESCRIPTOR / uwp - PSID (win8+)
+	PBYTE pdata = nullptr; // service - PSECURITY_DESCRIPTOR / uwp - PSID (win8+)
 } ITEM_APP_HELPER, *PITEM_APP_HELPER;
 
 typedef struct tagITEM_RULE
@@ -390,7 +388,7 @@ typedef struct tagITEM_RULE
 
 	ADDRESS_FAMILY af = AF_UNSPEC;
 
-	FWP_DIRECTION dir = FWP_DIRECTION_OUTBOUND;
+	FWP_DIRECTION direction = FWP_DIRECTION_OUTBOUND;
 
 	UINT8 profile = 0; // ffu!
 
@@ -451,8 +449,7 @@ typedef struct tagITEM_LOG
 		SAFE_DELETE_ARRAY (remote_fmt);
 		SAFE_DELETE_ARRAY (local_fmt);
 
-		if (hicon)
-			DestroyIcon (hicon);
+		SAFE_DELETE_ICON (hicon);
 	}
 
 	LPWSTR path = nullptr;

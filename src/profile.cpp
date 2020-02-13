@@ -1,5 +1,5 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #include "global.hpp"
 
@@ -19,20 +19,20 @@ bool _app_getappinfo (size_t app_hash, EnumInfo info_key, LPVOID presult, size_t
 	{
 		if (info_key == InfoTimestamp)
 		{
-			CopyMemory (presult, &ptr_app->timestamp, size);
+			RtlCopyMemory (presult, &ptr_app->timestamp, size);
 		}
 		else if (info_key == InfoIconId)
 		{
-			CopyMemory (presult, &ptr_app->icon_id, size);
+			RtlCopyMemory (presult, &ptr_app->icon_id, size);
 		}
 		else if (info_key == InfoSilent)
 		{
-			CopyMemory (presult, &ptr_app->is_silent, size);
+			RtlCopyMemory (presult, &ptr_app->is_silent, size);
 		}
 		else if (info_key == InfoListviewId)
 		{
 			INT v = _app_getlistview_id (ptr_app->type);
-			CopyMemory (presult, &v, size);
+			RtlCopyMemory (presult, &v, size);
 		}
 	}
 
@@ -71,22 +71,10 @@ bool _app_setappinfo (size_t app_hash, EnumInfo info_key, LONG_PTR info_value)
 	return true;
 }
 
-size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t timer, time_t last_notify, bool is_silent, bool is_enabled, bool is_fromdb)
+size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t timer, time_t last_notify, bool is_silent, bool is_enabled)
 {
 	if (_r_str_isempty (path) || PathIsDirectory (path))
 		return 0;
-
-	// if file is shortcut - get location
-	if (!is_fromdb)
-	{
-		if (_r_str_compare (_r_path_getextension (path), L".lnk", 4) == 0)
-		{
-			path = _app_getshortcutpath (app.GetHWND (), path);
-
-			if (_r_str_isempty (path))
-				return 0;
-		}
-	}
 
 	const size_t app_length = _r_str_length (path);
 	const size_t app_hash = _r_str_hash (path);
@@ -95,8 +83,7 @@ size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t ti
 		return app_hash; // already exists
 
 	PITEM_APP ptr_app = new ITEM_APP;
-
-	SecureZeroMemory (ptr_app, sizeof (ITEM_APP));
+	RtlSecureZeroMemory (ptr_app, sizeof (ITEM_APP));
 
 	const bool is_ntoskrnl = (app_hash == config.ntoskrnl_hash);
 
@@ -112,7 +99,7 @@ size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t ti
 	{
 		ptr_app->type = DataAppUWP;
 
-		_app_item_get (DataAppUWP, app_hash, nullptr, &real_path, timestamp ? nullptr : &timestamp, &ptr_app->pdata);
+		_app_item_get (DataAppUWP, app_hash, nullptr, &real_path, timestamp ? nullptr : &timestamp, nullptr);
 	}
 	else if (PathIsNetworkPath (path)) // network path
 	{
@@ -126,7 +113,7 @@ size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t ti
 
 		if (!is_ntoskrnl && _r_str_find (real_path, real_path.GetLength (), OBJ_NAME_PATH_SEPARATOR) == INVALID_SIZE_T)
 		{
-			if (_app_item_get (DataAppService, app_hash, nullptr, &real_path, timestamp ? nullptr : &timestamp, &ptr_app->pdata))
+			if (_app_item_get (DataAppService, app_hash, nullptr, &real_path, timestamp ? nullptr : &timestamp, nullptr))
 				ptr_app->type = DataAppService;
 
 			else
@@ -276,53 +263,53 @@ size_t _app_getnetworkapp (size_t network_hash)
 
 void _app_freeapplication (size_t app_hash)
 {
-	if (app_hash)
+	if (!app_hash)
+		return;
+
+	for (size_t i = 0; i < rules_arr.size (); i++)
 	{
-		for (size_t i = 0; i < rules_arr.size (); i++)
+		PR_OBJECT ptr_rule_object = _r_obj_reference (rules_arr.at (i));
+
+		if (!ptr_rule_object)
+			continue;
+
+		const PITEM_RULE ptr_rule = (PITEM_RULE)ptr_rule_object->pdata;
+
+		if (ptr_rule)
 		{
-			PR_OBJECT ptr_rule_object = _r_obj_reference (rules_arr.at (i));
-
-			if (!ptr_rule_object)
-				continue;
-
-			const PITEM_RULE ptr_rule = (PITEM_RULE)ptr_rule_object->pdata;
-
-			if (ptr_rule)
+			if (ptr_rule->type == DataRuleCustom)
 			{
-				if (ptr_rule->type == DataRuleCustom)
+				if (ptr_rule->apps.find (app_hash) != ptr_rule->apps.end ())
 				{
-					if (ptr_rule->apps.find (app_hash) != ptr_rule->apps.end ())
+					ptr_rule->apps.erase (app_hash);
+
+					if (ptr_rule->is_enabled && ptr_rule->apps.empty ())
 					{
-						ptr_rule->apps.erase (app_hash);
+						ptr_rule->is_enabled = false;
+						ptr_rule->is_haveerrors = false;
+					}
 
-						if (ptr_rule->is_enabled && ptr_rule->apps.empty ())
+					const INT rule_listview_id = _app_getlistview_id (ptr_rule->type);
+
+					if (rule_listview_id)
+					{
+						const INT item_pos = _app_getposition (app.GetHWND (), rule_listview_id, i);
+
+						if (item_pos != INVALID_INT)
 						{
-							ptr_rule->is_enabled = false;
-							ptr_rule->is_haveerrors = false;
-						}
-
-						const INT rule_listview_id = _app_getlistview_id (ptr_rule->type);
-
-						if (rule_listview_id)
-						{
-							const INT item_pos = _app_getposition (app.GetHWND (), rule_listview_id, i);
-
-							if (item_pos != INVALID_INT)
-							{
-								_r_fastlock_acquireshared (&lock_checkbox);
-								_app_setruleiteminfo (app.GetHWND (), rule_listview_id, item_pos, ptr_rule, false);
-								_r_fastlock_releaseshared (&lock_checkbox);
-							}
+							_r_fastlock_acquireshared (&lock_checkbox);
+							_app_setruleiteminfo (app.GetHWND (), rule_listview_id, item_pos, ptr_rule, false);
+							_r_fastlock_releaseshared (&lock_checkbox);
 						}
 					}
 				}
 			}
-
-			_r_obj_dereference (ptr_rule_object);
 		}
 
-		apps.erase (app_hash);
+		_r_obj_dereference (ptr_rule_object);
 	}
+
+	apps.erase (app_hash);
 }
 
 void _app_getcount (PITEM_STATUS ptr_status)
@@ -386,7 +373,7 @@ void _app_getcount (PITEM_STATUS ptr_status)
 	}
 }
 
-INT _app_getappgroup (size_t app_hash, PITEM_APP const ptr_app)
+INT _app_getappgroup (size_t app_hash, const PITEM_APP ptr_app)
 {
 	//	if(!app.ConfigGet (L"IsEnableGroups", false).AsBool ())
 	//		return INVALID_INT;
@@ -401,10 +388,10 @@ INT _app_getappgroup (size_t app_hash, PITEM_APP const ptr_app)
 	return ptr_app->is_enabled ? 0 : 2;
 }
 
-INT _app_getrulegroup (PITEM_RULE const ptr_rule)
+INT _app_getrulegroup (const PITEM_RULE ptr_rule)
 {
 	//	if(!app.ConfigGet (L"IsEnableGroups", false).AsBool ())
-	//		return INVALID_INT;
+	//		return I_GROUPIDNONE;
 
 	if (!ptr_rule || !ptr_rule->is_enabled)
 		return 2;
@@ -415,10 +402,10 @@ INT _app_getrulegroup (PITEM_RULE const ptr_rule)
 	return 0;
 }
 
-INT _app_getruleicon (PITEM_RULE const ptr_rule)
+INT _app_getruleicon (const PITEM_RULE ptr_rule)
 {
 	if (!ptr_rule)
-		return 0;
+		return I_IMAGENONE;
 
 	return ptr_rule->is_block ? 1 : 0;
 }
@@ -607,7 +594,7 @@ void _app_setruleiteminfo (HWND hwnd, INT listview_id, INT item, PITEM_RULE ptr_
 
 	_r_listview_setitem (hwnd, listview_id, item, 0, ptr_rule->type == DataRuleCustom && ptr_rule->is_readonly ? _r_fmt (L"%s" SZ_READONLY_RULE, ptr_rule->pname) : ptr_rule->pname, _app_getruleicon (ptr_rule), _app_getrulegroup (ptr_rule));
 	_r_listview_setitem (hwnd, listview_id, item, 1, ptr_rule->protocol ? _app_getprotoname (ptr_rule->protocol, AF_UNSPEC) : app.LocaleString (IDS_ANY, nullptr));
-	_r_listview_setitem (hwnd, listview_id, item, 2, app.LocaleString (ptr_rule->dir == FWP_DIRECTION_MAX ? IDS_ANY : IDS_DIRECTION_1 + ptr_rule->dir, nullptr));
+	_r_listview_setitem (hwnd, listview_id, item, 2, app.LocaleString (ptr_rule->direction == FWP_DIRECTION_MAX ? IDS_ANY : IDS_DIRECTION_1 + ptr_rule->direction, nullptr));
 
 	_r_listview_setitemcheck (hwnd, listview_id, item, ptr_rule->is_enabled);
 
@@ -670,8 +657,7 @@ void _app_ruleenable (PITEM_RULE ptr_rule, bool is_enable)
 				else
 				{
 					PITEM_RULE_CONFIG ptr_config = new ITEM_RULE_CONFIG;
-
-					SecureZeroMemory (ptr_config, sizeof (ITEM_RULE_CONFIG));
+					RtlSecureZeroMemory (ptr_config, sizeof (ITEM_RULE_CONFIG));
 
 					ptr_config->is_enabled = is_enable;
 					_r_str_alloc (&ptr_config->pname, INVALID_SIZE_T, ptr_rule->pname);
@@ -682,8 +668,7 @@ void _app_ruleenable (PITEM_RULE ptr_rule, bool is_enable)
 			else
 			{
 				PITEM_RULE_CONFIG ptr_config = new ITEM_RULE_CONFIG;
-
-				SecureZeroMemory (ptr_config, sizeof (ITEM_RULE_CONFIG));
+				RtlSecureZeroMemory (ptr_config, sizeof (ITEM_RULE_CONFIG));
 
 				ptr_config->is_enabled = is_enable;
 				_r_str_alloc (&ptr_config->pname, INVALID_SIZE_T, ptr_rule->pname);
@@ -825,7 +810,7 @@ void _app_ruleblocklistset (HWND hwnd, INT spy_state, INT update_state, INT extr
 			if (_app_gettab_id (hwnd) == listview_id)
 				_app_listviewsort (hwnd, listview_id);
 
-			_app_refreshstatus (hwnd);
+			_app_refreshstatus (hwnd, listview_id);
 		}
 
 		if (is_instantapply)
@@ -838,7 +823,7 @@ void _app_ruleblocklistset (HWND hwnd, INT spy_state, INT update_state, INT extr
 	}
 }
 
-rstring _app_rulesexpandapps (PITEM_RULE const ptr_rule, bool is_fordisplay, LPCWSTR delimeter)
+rstring _app_rulesexpandapps (const PITEM_RULE ptr_rule, bool is_fordisplay, LPCWSTR delimeter)
 {
 	rstring result;
 
@@ -988,7 +973,7 @@ bool _app_isapphaverule (size_t app_hash)
 	return false;
 }
 
-bool _app_isappused (PITEM_APP const ptr_app, size_t app_hash)
+bool _app_isappused (const PITEM_APP ptr_app, size_t app_hash)
 {
 	if (ptr_app && (ptr_app->is_enabled || ptr_app->is_silent) || _app_isapphaverule (app_hash))
 		return true;
@@ -996,7 +981,7 @@ bool _app_isappused (PITEM_APP const ptr_app, size_t app_hash)
 	return false;
 }
 
-bool _app_isappexists (PITEM_APP const ptr_app)
+bool _app_isappexists (const PITEM_APP ptr_app)
 {
 	if (!ptr_app)
 		return false;
@@ -1037,7 +1022,7 @@ bool _app_isrulehost (LPCWSTR rule)
 		return false;
 
 	NET_ADDRESS_INFO ni;
-	SecureZeroMemory (&ni, sizeof (ni));
+	RtlSecureZeroMemory (&ni, sizeof (ni));
 
 	USHORT port = 0;
 	BYTE prefix_length = 0;
@@ -1073,7 +1058,7 @@ bool _app_isruleip (LPCWSTR rule)
 		return false;
 
 	NET_ADDRESS_INFO ni;
-	SecureZeroMemory (&ni, sizeof (ni));
+	RtlSecureZeroMemory (&ni, sizeof (ni));
 
 	USHORT port = 0;
 	BYTE prefix_length = 0;
@@ -1098,7 +1083,7 @@ bool _app_isruleport (LPCWSTR rule)
 	return true;
 }
 
-bool _app_profile_load_check_node (const pugi::xml_node & root, EnumXmlType type, bool is_strict)
+bool _app_profile_load_check_node (const pugi::xml_node& root, EnumXmlType type, bool is_strict)
 {
 	if (root)
 	{
@@ -1129,21 +1114,21 @@ bool _app_profile_load_check (LPCWSTR path, EnumXmlType type, bool is_strict)
 void _app_profile_load_fallback ()
 {
 	if (!_app_isappfound (config.my_hash))
-		_app_addapplication (nullptr, app.GetBinaryPath (), 0, 0, 0, false, true, true);
+		_app_addapplication (nullptr, app.GetBinaryPath (), 0, 0, 0, false, true);
 
 	// disable deletion for this shit ;)
 	if (!_app_isappfound (config.ntoskrnl_hash))
-		_app_addapplication (nullptr, PROC_SYSTEM_NAME, 0, 0, 0, false, false, true);
+		_app_addapplication (nullptr, PROC_SYSTEM_NAME, 0, 0, 0, false, false);
 
 	if (!_app_isappfound (config.svchost_hash))
-		_app_addapplication (nullptr, _r_path_expand (PATH_SVCHOST), 0, 0, 0, false, false, true);
+		_app_addapplication (nullptr, _r_path_expand (PATH_SVCHOST), 0, 0, 0, false, false);
 
 	_app_setappinfo (config.my_hash, InfoUndeletable, TRUE);
 	_app_setappinfo (config.ntoskrnl_hash, InfoUndeletable, TRUE);
 	_app_setappinfo (config.svchost_hash, InfoUndeletable, TRUE);
 }
 
-void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, UINT version)
+void _app_profile_load_helper (const pugi::xml_node& root, EnumDataType type, UINT version)
 {
 	const INT blocklist_spy_state = std::clamp (app.ConfigGet (L"BlocklistSpyState", 2).AsInt (), 0, 2);
 	const INT blocklist_update_state = std::clamp (app.ConfigGet (L"BlocklistUpdateState", 0).AsInt (), 0, 2);
@@ -1154,7 +1139,7 @@ void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, U
 		if (type == DataAppRegular)
 		{
 			_r_fastlock_acquireshared (&lock_access);
-			_app_addapplication (nullptr, item.attribute (L"path").as_string (), item.attribute (L"timestamp").as_llong (), item.attribute (L"timer").as_llong (), 0, item.attribute (L"is_silent").as_bool (), item.attribute (L"is_enabled").as_bool (), true);
+			_app_addapplication (nullptr, item.attribute (L"path").as_string (), item.attribute (L"timestamp").as_llong (), item.attribute (L"timer").as_llong (), 0, item.attribute (L"is_silent").as_bool (), item.attribute (L"is_enabled").as_bool ());
 			_r_fastlock_releaseshared (&lock_access);
 		}
 		else if (type == DataRuleBlocklist || type == DataRuleSystem || type == DataRuleCustom)
@@ -1181,7 +1166,7 @@ void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, U
 				_r_str_alloc (&ptr_rule->prule_local, rule_local_length, attr_rule_local);
 			}
 
-			ptr_rule->dir = (FWP_DIRECTION)item.attribute (L"dir").as_int ();
+			ptr_rule->direction = (FWP_DIRECTION)item.attribute (L"dir").as_int ();
 			ptr_rule->protocol = (UINT8)item.attribute (L"protocol").as_int ();
 			ptr_rule->af = (ADDRESS_FAMILY)item.attribute (L"version").as_int ();
 
@@ -1257,7 +1242,7 @@ void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, U
 						_r_str_trim (rlink, DIVIDER_TRIM);
 
 						const rstring app_path = _r_path_expand (rlink);
-						size_t app_hash = app_path.Hash ();
+						size_t app_hash = _r_str_hash (app_path);
 
 						if (app_hash)
 						{
@@ -1267,7 +1252,7 @@ void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, U
 							if (!_app_isappfound (app_hash))
 							{
 								_r_fastlock_acquireshared (&lock_access);
-								app_hash = _app_addapplication (nullptr, app_path, 0, 0, 0, false, false, true);
+								app_hash = _app_addapplication (nullptr, app_path, 0, 0, 0, false, false);
 								_r_fastlock_releaseshared (&lock_access);
 							}
 
@@ -1299,13 +1284,12 @@ void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, U
 			//if (_app_isruleblocklist (rule_name))
 			//	continue;
 
-			const size_t rule_hash = rule_name.Hash ();
+			const size_t rule_hash = _r_str_hash (rule_name);
 
 			if (rule_hash && rules_config.find (rule_hash) == rules_config.end ())
 			{
 				PITEM_RULE_CONFIG ptr_config = new ITEM_RULE_CONFIG;
-
-				SecureZeroMemory (ptr_config, sizeof (ITEM_RULE_CONFIG));
+				RtlSecureZeroMemory (ptr_config, sizeof (ITEM_RULE_CONFIG));
 
 				ptr_config->is_enabled = item.attribute (L"is_enabled").as_bool ();
 
@@ -1323,7 +1307,7 @@ void _app_profile_load_helper (const pugi::xml_node & root, EnumDataType type, U
 	}
 }
 
-void _app_profile_load_internal (LPCWSTR path, LPCWSTR path_backup, time_t * ptimestamp)
+void _app_profile_load_internal (LPCWSTR path, LPCWSTR path_backup, time_t* ptimestamp)
 {
 	pugi::xml_document doc_original;
 	pugi::xml_document doc_backup;
@@ -1337,10 +1321,10 @@ void _app_profile_load_internal (LPCWSTR path, LPCWSTR path_backup, time_t * pti
 	if (path_backup)
 	{
 		DWORD size = 0;
-		const LPVOID buffer = _app_loadresource (app.GetHINSTANCE (), path_backup, RT_RCDATA, &size);
+		const LPVOID pbuffer = _r_loadresource (app.GetHINSTANCE (), path_backup, RT_RCDATA, &size);
 
-		if (buffer)
-			load_backup = doc_backup.load_buffer (buffer, size, PUGIXML_LOAD_FLAGS, PUGIXML_LOAD_ENCODING);
+		if (pbuffer)
+			load_backup = doc_backup.load_buffer (pbuffer, size, PUGIXML_LOAD_FLAGS, PUGIXML_LOAD_ENCODING);
 
 		if (load_backup)
 		{
@@ -1358,7 +1342,7 @@ void _app_profile_load_internal (LPCWSTR path, LPCWSTR path_backup, time_t * pti
 
 	// show only syntax, memory and i/o errors...
 	if (!load_original && load_original.status != pugi::status_file_not_found && load_original.status != pugi::status_no_document_element)
-		_app_logerror (L"pugi::load_file", 0, _r_fmt (L"status: %d,offset: %" PR_PTRDIFF L",text: %hs,file: %s", load_original.status, load_original.offset, load_original.description (), path), false);
+		app.LogError (L"pugi::load_file", 0, _r_fmt (L"status: %d,offset: %" PR_PTRDIFF L",text: %hs,file: %s", load_original.status, load_original.offset, load_original.description (), path), UID);
 
 	if (load_original && root)
 	{
@@ -1395,7 +1379,7 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 			_r_listview_deleteallitems (hwnd, i);
 	}
 
-	_r_fastlock_acquireexclusive (&lock_access);
+	_r_fastlock_acquireshared (&lock_access);
 
 	// clear apps
 	_app_freeobjects_map (apps, true);
@@ -1416,13 +1400,13 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 	// generate services list
 	_app_generate_services ();
 
-	_r_fastlock_releaseexclusive (&lock_access);
+	_r_fastlock_releaseshared (&lock_access);
 
 	// load profile
-	if (path_custom || _r_fs_exists (config.profile_path) || _r_fs_exists (config.profile_path_backup))
+	if (!_r_str_isempty (path_custom) || _r_fs_exists (config.profile_path) || _r_fs_exists (config.profile_path_backup))
 	{
 		pugi::xml_document doc;
-		pugi::xml_parse_result result = doc.load_file (path_custom ? path_custom : config.profile_path, PUGIXML_LOAD_FLAGS, PUGIXML_LOAD_ENCODING);
+		pugi::xml_parse_result result = doc.load_file (!_r_str_isempty (path_custom) ? path_custom : config.profile_path, PUGIXML_LOAD_FLAGS, PUGIXML_LOAD_ENCODING);
 
 		// load backup
 		if (!result)
@@ -1432,11 +1416,11 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 		{
 			// show only syntax, memory and i/o errors...
 			if (result.status != pugi::status_file_not_found && result.status != pugi::status_no_document_element)
-				_app_logerror (L"pugi::load_file", 0, _r_fmt (L"status: %d,offset: %" PR_PTRDIFF L",text: %hs,file: %s", result.status, result.offset, result.description (), path_custom ? path_custom : config.profile_path), false);
+				app.LogError (L"pugi::load_file", 0, _r_fmt (L"status: %d,offset: %" PR_PTRDIFF L",text: %hs,file: %s", result.status, result.offset, result.description (), !_r_str_isempty (path_custom) ? path_custom : config.profile_path), UID);
 
-			_r_fastlock_acquireexclusive (&lock_access);
+			_r_fastlock_acquireshared (&lock_access);
 			_app_profile_load_fallback ();
-			_r_fastlock_releaseexclusive (&lock_access);
+			_r_fastlock_releaseshared (&lock_access);
 		}
 		else
 		{
@@ -1454,9 +1438,9 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 					if (root_apps)
 						_app_profile_load_helper (root_apps, DataAppRegular, version);
 
-					_r_fastlock_acquireexclusive (&lock_access);
+					_r_fastlock_acquireshared (&lock_access);
 					_app_profile_load_fallback ();
-					_r_fastlock_releaseexclusive (&lock_access);
+					_r_fastlock_releaseshared (&lock_access);
 
 					// load rules config (new!)
 					pugi::xml_node root_rules_config = root.child (L"rules_config");
@@ -1502,9 +1486,9 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 					_r_fs_move (config.apps_path, config.apps_path_backup, MOVEFILE_REPLACE_EXISTING);
 			}
 
-			_r_fastlock_acquireexclusive (&lock_access);
+			_r_fastlock_acquireshared (&lock_access);
 			_app_profile_load_fallback ();
-			_r_fastlock_releaseexclusive (&lock_access);
+			_r_fastlock_releaseshared (&lock_access);
 		}
 
 		// load rules config (old!)
@@ -1618,7 +1602,7 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 			PITEM_APP_HELPER ptr_app_item = (PITEM_APP_HELPER)ptr_item_object->pdata;
 
 			if (ptr_app_item)
-				_app_addapplication (hwnd, ptr_app_item->internal_name, ptr_app_item->timestamp, 0, 0, false, false, true);
+				_app_addapplication (hwnd, ptr_app_item->internal_name, ptr_app_item->timestamp, 0, 0, false, false);
 
 			_r_obj_dereference (ptr_item_object);
 		}
@@ -1670,7 +1654,7 @@ void _app_profile_load (HWND hwnd, LPCWSTR path_custom)
 void _app_profile_save (LPCWSTR path_custom)
 {
 	const time_t current_time = _r_unixtime_now ();
-	const bool is_backuprequired = !path_custom && (app.ConfigGet (L"IsBackupProfile", true).AsBool () && (((current_time - app.ConfigGet (L"BackupTimestamp", time_t (0)).AsLonglong ()) >= app.ConfigGet (L"BackupPeriod", time_t (_R_SECONDSCLOCK_HOUR (BACKUP_HOURS_PERIOD))).AsLonglong ()) || !_r_fs_exists (config.profile_path_backup)));
+	const bool is_backuprequired = _r_str_isempty (path_custom) && app.ConfigGet (L"IsBackupProfile", true).AsBool () && (!_r_fs_exists (config.profile_path_backup) || ((current_time - app.ConfigGet (L"BackupTimestamp", time_t (0)).AsLonglong ()) >= app.ConfigGet (L"BackupPeriod", time_t (_R_SECONDSCLOCK_HOUR (BACKUP_HOURS_PERIOD))).AsLonglong ()));
 
 	pugi::xml_document doc;
 	pugi::xml_node root = doc.append_child (L"root");
@@ -1725,7 +1709,7 @@ void _app_profile_save (LPCWSTR path_custom)
 							item.append_attribute (L"timestamp").set_value (ptr_app->timestamp);
 
 						// set timer (if presented)
-						if (_app_istimeractive (ptr_app))
+						if (ptr_app->timer && _app_istimeractive (ptr_app))
 							item.append_attribute (L"timer").set_value (ptr_app->timer);
 
 						// ffu!
@@ -1782,8 +1766,8 @@ void _app_profile_save (LPCWSTR path_custom)
 					if (ptr_rule->profile)
 						item.append_attribute (L"profile").set_value (ptr_rule->profile);
 
-					if (ptr_rule->dir != FWP_DIRECTION_OUTBOUND)
-						item.append_attribute (L"dir").set_value (ptr_rule->dir);
+					if (ptr_rule->direction != FWP_DIRECTION_OUTBOUND)
+						item.append_attribute (L"dir").set_value (ptr_rule->direction);
 
 					if (ptr_rule->protocol != 0)
 						item.append_attribute (L"protocol").set_value (ptr_rule->protocol);
@@ -1884,7 +1868,7 @@ void _app_profile_save (LPCWSTR path_custom)
 			_r_fastlock_releaseshared (&lock_access);
 		}
 
-		doc.save_file (path_custom ? path_custom : config.profile_path, L"\t", PUGIXML_SAVE_FLAGS, PUGIXML_SAVE_ENCODING);
+		doc.save_file (_r_str_isempty (path_custom) ? config.profile_path : path_custom, L"\t", PUGIXML_SAVE_FLAGS, PUGIXML_SAVE_ENCODING);
 
 		// make backup
 		if (is_backuprequired)

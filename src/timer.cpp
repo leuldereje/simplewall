@@ -1,49 +1,23 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #include "global.hpp"
 
-bool _app_timer_set (HWND hwnd, PITEM_APP ptr_app, time_t seconds)
+void _app_timer_set (HWND hwnd, PITEM_APP ptr_app, time_t seconds)
 {
 	if (!ptr_app)
-		return false;
+		return;
+
+	const size_t app_hash = _r_str_hash (ptr_app->original_path); // note: be carefull (!)
+
+	const INT listview_id = _app_getlistview_id (ptr_app->type);
+	const INT item_pos = _app_getposition (hwnd, listview_id, app_hash);
 
 	if (seconds <= 0)
 	{
-		if (ptr_app->timer)
-			ptr_app->timer = 0;
-
-		if (ptr_app->htimer)
-		{
-			DeleteTimerQueueTimer (config.htimer, ptr_app->htimer, nullptr);
-			ptr_app->htimer = nullptr;
-		}
-
-		return false;
-	}
-
-	const time_t current_time = _r_unixtime_now ();
-
-	const size_t app_hash = _r_str_hash (ptr_app->original_path); // note: be carefull (!)
-	BOOL is_created = FALSE;
-
-	if (ptr_app->htimer)
-	{
-		is_created = ChangeTimerQueueTimer (config.htimer, ptr_app->htimer, DWORD (seconds * _R_SECONDSCLOCK_MSEC), 0);
-	}
-	else
-	{
-		is_created = CreateTimerQueueTimer (&ptr_app->htimer, config.htimer, &_app_timer_callback, (PVOID)app_hash, DWORD (seconds * _R_SECONDSCLOCK_MSEC), 0, WT_EXECUTEONLYONCE | WT_EXECUTEINTIMERTHREAD);
-	}
-
-	if (is_created)
-	{
-		ptr_app->is_enabled = true;
-		ptr_app->timer = current_time + seconds;
-	}
-	else
-	{
 		ptr_app->is_enabled = false;
+		ptr_app->is_haveerrors = false;
+
 		ptr_app->timer = 0;
 
 		if (ptr_app->htimer)
@@ -52,38 +26,66 @@ bool _app_timer_set (HWND hwnd, PITEM_APP ptr_app, time_t seconds)
 			ptr_app->htimer = nullptr;
 		}
 	}
+	else
+	{
+		const time_t current_time = _r_unixtime_now ();
+		bool is_created = false;
 
-	const INT listview_id = _app_getlistview_id (ptr_app->type);
-	const INT item_pos = _app_getposition (hwnd, listview_id, app_hash);
+		if (ptr_app->htimer)
+		{
+			is_created = !!ChangeTimerQueueTimer (config.htimer, ptr_app->htimer, DWORD (seconds * _R_SECONDSCLOCK_MSEC), 0);
+		}
+		else
+		{
+			is_created = !!CreateTimerQueueTimer (&ptr_app->htimer, config.htimer, &_app_timer_callback, (PVOID)app_hash, DWORD (seconds * _R_SECONDSCLOCK_MSEC), 0, WT_EXECUTEONLYONCE | WT_EXECUTEINTIMERTHREAD);
+		}
+
+		if (is_created)
+		{
+			ptr_app->is_enabled = true;
+			ptr_app->timer = current_time + seconds;
+		}
+		else
+		{
+			ptr_app->is_enabled = false;
+			ptr_app->is_haveerrors = false;
+
+			ptr_app->timer = 0;
+
+			if (ptr_app->htimer)
+			{
+				DeleteTimerQueueTimer (config.htimer, ptr_app->htimer, nullptr);
+				ptr_app->htimer = nullptr;
+			}
+		}
+	}
 
 	if (item_pos != INVALID_INT)
 	{
 		_r_fastlock_acquireshared (&lock_checkbox);
 
-		_r_listview_setitem (hwnd, listview_id, item_pos, 0, nullptr, INVALID_INT, _app_getappgroup (app_hash, ptr_app));
+		_r_listview_setitem (hwnd, listview_id, item_pos, 0, nullptr, I_IMAGENONE, _app_getappgroup (app_hash, ptr_app));
 		_r_listview_setitemcheck (hwnd, listview_id, item_pos, ptr_app->is_enabled);
 
 		_r_fastlock_releaseshared (&lock_checkbox);
 	}
-
-	return true;
 }
 
-bool _app_timer_reset (HWND hwnd, PITEM_APP ptr_app)
+void _app_timer_reset (HWND hwnd, PITEM_APP ptr_app)
 {
 	if (!ptr_app || !_app_istimeractive (ptr_app))
-		return false;
+		return;
 
+	ptr_app->is_enabled = false;
 	ptr_app->is_haveerrors = false;
+
+	ptr_app->timer = 0;
 
 	if (ptr_app->htimer)
 	{
 		DeleteTimerQueueTimer (config.htimer, ptr_app->htimer, nullptr);
 		ptr_app->htimer = nullptr;
 	}
-
-	ptr_app->is_enabled = false;
-	ptr_app->timer = 0;
 
 	const size_t app_hash = _r_str_hash (ptr_app->original_path); // note: be carefull (!)
 	const INT listview_id = _app_getlistview_id (ptr_app->type);
@@ -99,11 +101,9 @@ bool _app_timer_reset (HWND hwnd, PITEM_APP ptr_app)
 			_r_fastlock_releaseshared (&lock_checkbox);
 		}
 	}
-
-	return true;
 }
 
-bool _app_istimeractive (PITEM_APP const ptr_app)
+bool _app_istimeractive (const PITEM_APP ptr_app)
 {
 	return ptr_app->htimer || (ptr_app->timer && (ptr_app->timer > _r_unixtime_now ()));
 }
@@ -163,11 +163,13 @@ void CALLBACK _app_timer_callback (PVOID lparam, BOOLEAN)
 	_app_timer_reset (hwnd, ptr_app);
 	_wfp_create3filters (_wfp_getenginehandle (), rules, __LINE__);
 
+	_r_obj_dereference (ptr_app_object);
+
 	const INT listview_id = _app_gettab_id (hwnd);
 
 	_app_listviewsort (hwnd, listview_id);
+	_app_refreshstatus (hwnd, listview_id);
 
-	_app_refreshstatus (hwnd);
 	_app_profile_save ();
 
 	_r_listview_redraw (hwnd, listview_id);

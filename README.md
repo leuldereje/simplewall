@@ -3,7 +3,7 @@ simplewall [![Github All Releases](https://img.shields.io/github/downloads/henry
 #### Definitely for advanced users.
 -------
 
-[![simplewall](https://www.henrypp.org/images/simplewall.png?cachefix)](https://github.com/henrypp/simplewall/issues/250)
+[![simplewall](https://www.henrypp.org/images/simplewall.png?cf)](https://github.com/henrypp/simplewall/issues/250)
 
 ### Description:
 Simple tool to configure Windows Filtering Platform (WFP) which can configure network activity on your computer.
@@ -45,4 +45,4 @@ To activate portable mode, create "simplewall.ini" in application folder, or mov
 Website: [www.henrypp.org](https://www.henrypp.org)<br />
 Support: support@henrypp.org<br />
 <br />
-(c) 2016-2019 Henry++
+(c) 2016-2020 Henry++

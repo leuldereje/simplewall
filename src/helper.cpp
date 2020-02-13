@@ -1,5 +1,5 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #include "global.hpp"
 
@@ -73,16 +73,7 @@ void _app_settab_id (HWND hwnd, INT page_id)
 
 		if (listview_id == page_id)
 		{
-			SendDlgItemMessage (hwnd, IDC_TAB, TCM_SETCURSEL, (WPARAM)i, 0);
-
-			NMHDR hdr = {0};
-
-			hdr.code = TCN_SELCHANGE;
-			hdr.hwndFrom = hwnd;
-			hdr.idFrom = IDC_TAB;
-
-			SendMessage (hwnd, WM_NOTIFY, 0, (LPARAM)&hdr);
-
+			_r_tab_selectitem (hwnd, IDC_TAB, i);
 			return;
 		}
 	}
@@ -100,7 +91,7 @@ bool _app_initinterfacestate (HWND hwnd, bool is_forced)
 		SendDlgItemMessage (config.hrebar, IDC_TOOLBAR, TB_ENABLEBUTTON, IDM_TRAY_START, MAKELPARAM (FALSE, 0));
 		SendDlgItemMessage (config.hrebar, IDC_TOOLBAR, TB_ENABLEBUTTON, IDM_REFRESH, MAKELPARAM (FALSE, 0));
 
-		_r_status_settext (hwnd, IDC_STATUSBAR, 0, app.LocaleString (IDS_STATUS_FILTERS_PROCESSING, L"..."), nullptr);
+		_r_status_settext (hwnd, IDC_STATUSBAR, 0, app.LocaleString (IDS_STATUS_FILTERS_PROCESSING, L"..."));
 
 		return true;
 	}
@@ -110,13 +101,13 @@ bool _app_initinterfacestate (HWND hwnd, bool is_forced)
 
 void _app_restoreinterfacestate (HWND hwnd, bool is_enabled)
 {
-	if (is_enabled)
-	{
-		SendDlgItemMessage (config.hrebar, IDC_TOOLBAR, TB_ENABLEBUTTON, IDM_TRAY_START, MAKELPARAM (TRUE, 0));
-		SendDlgItemMessage (config.hrebar, IDC_TOOLBAR, TB_ENABLEBUTTON, IDM_REFRESH, MAKELPARAM (TRUE, 0));
+	if (!is_enabled)
+		return;
 
-		_r_status_settext (hwnd, IDC_STATUSBAR, 0, app.LocaleString (_wfp_isfiltersinstalled () ? IDS_STATUS_FILTERS_ACTIVE : IDS_STATUS_FILTERS_INACTIVE, nullptr), nullptr);
-	}
+	SendDlgItemMessage (config.hrebar, IDC_TOOLBAR, TB_ENABLEBUTTON, IDM_TRAY_START, MAKELPARAM (TRUE, 0));
+	SendDlgItemMessage (config.hrebar, IDC_TOOLBAR, TB_ENABLEBUTTON, IDM_REFRESH, MAKELPARAM (TRUE, 0));
+
+	_r_status_settext (hwnd, IDC_STATUSBAR, 0, app.LocaleString (_wfp_isfiltersinstalled () ? IDS_STATUS_FILTERS_ACTIVE : IDS_STATUS_FILTERS_INACTIVE, nullptr));
 }
 
 void _app_setinterfacestate (HWND hwnd)
@@ -124,21 +115,23 @@ void _app_setinterfacestate (HWND hwnd)
 	const bool is_filtersinstalled = _wfp_isfiltersinstalled ();
 	const INT icon_id = is_filtersinstalled ? IDI_ACTIVE : IDI_INACTIVE;
 
-	const HICON hico_sm = app.GetSharedImage (app.GetHINSTANCE (), icon_id, _r_dc_getdpi (hwnd, _R_SIZE_ICON16));
-	const HICON hico_big = app.GetSharedImage (app.GetHINSTANCE (), icon_id, _r_dc_getdpi (hwnd, _R_SIZE_ICON32));
+	const HICON hico_sm = app.GetSharedImage (app.GetHINSTANCE (), icon_id, _r_dc_getsystemmetrics (hwnd, SM_CXSMICON));
+	const HICON hico_big = app.GetSharedImage (app.GetHINSTANCE (), icon_id, _r_dc_getsystemmetrics (hwnd, SM_CXICON));
 
 	SendMessage (hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hico_sm);
 	SendMessage (hwnd, WM_SETICON, ICON_BIG, (LPARAM)hico_big);
 
 	//SendDlgItemMessage (hwnd, IDC_STATUSBAR, SB_SETICON, 0, (LPARAM)hico_sm);
 
+	if (!_wfp_isfiltersapplying ())
+		_r_status_settext (hwnd, IDC_STATUSBAR, 0, app.LocaleString (is_filtersinstalled ? IDS_STATUS_FILTERS_ACTIVE : IDS_STATUS_FILTERS_INACTIVE, nullptr));
+
 	_r_toolbar_setbutton (config.hrebar, IDC_TOOLBAR, IDM_TRAY_START, app.LocaleString (is_filtersinstalled ? IDS_TRAY_STOP : IDS_TRAY_START, nullptr), BTNS_BUTTON | BTNS_AUTOSIZE | BTNS_SHOWTEXT, 0, is_filtersinstalled ? 1 : 0);
 
-	_r_tray_setinfo (hwnd, UID, hico_sm, nullptr);
-	_r_tray_toggle (hwnd, UID, true);
+	_r_tray_setinfo (hwnd, UID, hico_sm, APP_NAME);
 }
 
-bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, UINT16 port, LPWSTR * ptr_dest, DWORD flags)
+bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, UINT16 port, LPWSTR* ptr_dest, DWORD flags)
 {
 	if (!ptr_addr || !ptr_dest || (af != AF_INET && af != AF_INET6))
 		return false;
@@ -147,10 +140,7 @@ bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, U
 
 	WCHAR formatted_address[DNS_MAX_NAME_BUFFER_LENGTH] = {0};
 
-	if (proto && (flags & FMTADDR_USE_PROTOCOL) == FMTADDR_USE_PROTOCOL)
-		_r_str_printf (formatted_address, _countof (formatted_address), L"%s://", _app_getprotoname (proto, AF_UNSPEC).GetString ());
-
-	if ((flags & FMTADDR_AS_ARPA) == FMTADDR_AS_ARPA)
+	if ((flags & FMTADDR_AS_ARPA) != 0)
 	{
 		if (af == AF_INET)
 		{
@@ -168,11 +158,14 @@ bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, U
 	}
 	else
 	{
+		if ((flags & FMTADDR_USE_PROTOCOL) != 0)
+			_r_str_printf (formatted_address, _countof (formatted_address), L"%s://", _app_getprotoname (proto, AF_UNSPEC).GetString ());
+
 		WCHAR addr_str[DNS_MAX_NAME_BUFFER_LENGTH] = {0};
 
 		if (InetNtop (af, ptr_addr, addr_str, _countof (addr_str)))
 		{
-			if ((flags & FMTADDR_AS_RULE) == FMTADDR_AS_RULE)
+			if ((flags & FMTADDR_AS_RULE) != 0)
 			{
 				if (af == AF_INET)
 					result = !IN4_IS_ADDR_UNSPECIFIED ((PIN_ADDR)ptr_addr);
@@ -189,12 +182,12 @@ bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, U
 				_r_str_cat (formatted_address, _countof (formatted_address), addr_str);
 			}
 		}
+
+		if (port && (flags & FMTADDR_USE_PROTOCOL) == 0)
+			_r_str_cat (formatted_address, _countof (formatted_address), _r_fmt (!_r_str_isempty (formatted_address) ? L":%" PRIu16 : L"%" PRIu16, port));
 	}
 
-	if (port)
-		_r_str_cat (formatted_address, _countof (formatted_address), _r_fmt (!_r_str_isempty (formatted_address) ? L":%" PRIu16 : L"%" PRIu16, port));
-
-	if ((flags & FMTADDR_RESOLVE_HOST) == FMTADDR_RESOLVE_HOST)
+	if ((flags & FMTADDR_RESOLVE_HOST) != 0)
 	{
 		if (result && app.ConfigGet (L"IsNetworkResolutionsEnabled", false).AsBool ())
 		{
@@ -235,8 +228,6 @@ bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, U
 						_app_freeobjects_map (cache_hosts, false);
 						cache_hosts[addr_hash] = _r_obj_allocate (ptr_cache, &_app_dereferencestring);
 
-						_r_obj_reference (cache_hosts[addr_hash]);
-
 						_r_fastlock_releaseexclusive (&lock_cache);
 					}
 				}
@@ -249,14 +240,11 @@ bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, U
 	return !_r_str_isempty (formatted_address);
 }
 
-rstring _app_formatport (UINT16 port, LPCWSTR empty_text)
+rstring _app_formatport (UINT16 port, bool is_noempty)
 {
-	if (!port)
-		return empty_text;
-
 	rstring result;
 
-	if (_r_str_isempty (empty_text))
+	if (is_noempty)
 	{
 		result.Format (L"%" PRIu16, port);
 
@@ -292,7 +280,7 @@ void _app_freeobjects_vec (OBJECTS_VEC & ptr_vec)
 	ptr_vec.clear ();
 }
 
-void _app_freethreadpool (THREADS_VEC * ptr_pool)
+void _app_freethreadpool (THREADS_VEC* ptr_pool)
 {
 	if (!ptr_pool || ptr_pool->empty ())
 		return;
@@ -301,11 +289,11 @@ void _app_freethreadpool (THREADS_VEC * ptr_pool)
 
 	for (size_t i = (count - 1); i != INVALID_SIZE_T; i--)
 	{
-		const HANDLE hthread = ptr_pool->at (i);
+		HANDLE& hthread = ptr_pool->at (i);
 
 		if (WaitForSingleObjectEx (hthread, 0, FALSE) == WAIT_OBJECT_0)
 		{
-			CloseHandle (hthread);
+			SAFE_DELETE_HANDLE (hthread);
 			ptr_pool->erase (ptr_pool->begin () + i);
 		}
 	}
@@ -330,7 +318,7 @@ void _app_freelogstack ()
 	}
 }
 
-void _app_getappicon (ITEM_APP* ptr_app, bool is_small, PINT picon_id, HICON * picon)
+void _app_getappicon (const PITEM_APP ptr_app, bool is_small, PINT picon_id, HICON* picon)
 {
 	const bool is_iconshidden = app.ConfigGet (L"IsIconsHidden", false).AsBool ();
 
@@ -410,6 +398,7 @@ bool _app_getfileicon (LPCWSTR path, bool is_small, PINT picon_id, HICON * picon
 	bool result = false;
 
 	SHFILEINFO shfi = {0};
+
 	DWORD flags = 0;
 
 	if (picon_id)
@@ -421,26 +410,15 @@ bool _app_getfileicon (LPCWSTR path, bool is_small, PINT picon_id, HICON * picon
 	if (is_small)
 		flags |= SHGFI_SMALLICON;
 
-	const HRESULT hrComInit = CoInitialize (nullptr);
-
-	if ((hrComInit == RPC_E_CHANGED_MODE) || SUCCEEDED (hrComInit))
+	if (SHGetFileInfo (path, 0, &shfi, sizeof (shfi), flags))
 	{
-		if (SHGetFileInfo (path, 0, &shfi, sizeof (shfi), flags))
-		{
-			if (picon_id)
-				*picon_id = shfi.iIcon;
+		if (picon_id)
+			*picon_id = shfi.iIcon;
 
-			if (picon && shfi.hIcon)
-			{
-				*picon = CopyIcon (shfi.hIcon);
-				DestroyIcon (shfi.hIcon);
-			}
+		if (picon && shfi.hIcon)
+			*picon = shfi.hIcon;
 
-			result = true;
-		}
-
-		if (SUCCEEDED (hrComInit))
-			CoUninitialize ();
+		result = true;
 	}
 
 	if (!result)
@@ -457,51 +435,7 @@ bool _app_getfileicon (LPCWSTR path, bool is_small, PINT picon_id, HICON * picon
 	return result;
 }
 
-rstring _app_getshortcutpath (HWND hwnd, LPCWSTR path)
-{
-	rstring result;
-
-	IShellLink* psl = nullptr;
-
-	const HRESULT hrComInit = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
-
-	if ((hrComInit == RPC_E_CHANGED_MODE) || SUCCEEDED (hrComInit))
-	{
-		if (SUCCEEDED (CoInitializeSecurity (nullptr, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, 0, nullptr)))
-		{
-			if (SUCCEEDED (CoCreateInstance (CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLink, (void**)&psl)))
-			{
-				IPersistFile* ppf = nullptr;
-
-				if (SUCCEEDED (psl->QueryInterface (IID_IPersistFile, (void**)&ppf)))
-				{
-					if (SUCCEEDED (ppf->Load (path, STGM_READ)))
-					{
-						if (SUCCEEDED (psl->Resolve (hwnd, 0)))
-						{
-							WIN32_FIND_DATA wfd = {0};
-							WCHAR buffer[MAX_PATH] = {0};
-
-							if (SUCCEEDED (psl->GetPath (buffer, _countof (buffer), (LPWIN32_FIND_DATA)&wfd, SLGP_RAWPATH)))
-								result = buffer;
-						}
-					}
-
-					ppf->Release ();
-				}
-
-				psl->Release ();
-			}
-		}
-
-		if (SUCCEEDED (hrComInit))
-			CoUninitialize ();
-	}
-
-	return result;
-}
-
-PR_OBJECT _app_getsignatureinfo (size_t app_hash, PITEM_APP ptr_app)
+PR_OBJECT _app_getsignatureinfo (size_t app_hash, const PITEM_APP ptr_app)
 {
 	if (!app.ConfigGet (L"IsCertificatesEnabled", false).AsBool ())
 		return nullptr;
@@ -527,7 +461,7 @@ PR_OBJECT _app_getsignatureinfo (size_t app_hash, PITEM_APP ptr_app)
 
 		const HANDLE hfile = CreateFile (ptr_app->real_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 
-		if (hfile != INVALID_HANDLE_VALUE)
+		if (_r_fs_isvalidhandle (hfile))
 		{
 			GUID WinTrustActionGenericVerifyV2 = WINTRUST_ACTION_GENERIC_VERIFY_V2;
 
@@ -563,7 +497,7 @@ PR_OBJECT _app_getsignatureinfo (size_t app_hash, PITEM_APP ptr_app)
 
 						if (psProvCert)
 						{
-							const DWORD num_chars = CertGetNameString (psProvCert->pCert, CERT_NAME_ATTR_TYPE, 0, szOID_COMMON_NAME, nullptr, 0) + 1;
+							const DWORD num_chars = CertGetNameString (psProvCert->pCert, CERT_NAME_ATTR_TYPE, 0, szOID_COMMON_NAME, nullptr, 0);
 
 							if (num_chars > 1)
 							{
@@ -602,7 +536,7 @@ PR_OBJECT _app_getsignatureinfo (size_t app_hash, PITEM_APP ptr_app)
 	return ptr_cache_object;
 }
 
-PR_OBJECT _app_getversioninfo (size_t app_hash, PITEM_APP ptr_app)
+PR_OBJECT _app_getversioninfo (size_t app_hash, const PITEM_APP ptr_app)
 {
 	if (!app_hash || !ptr_app || _r_str_isempty (ptr_app->real_path))
 		return nullptr;
@@ -649,7 +583,8 @@ PR_OBJECT _app_getversioninfo (size_t app_hash, PITEM_APP ptr_app)
 
 						if (VerQueryValue (versionInfo, L"\\VarFileInfo\\Translation", &retbuf, &vLen) && vLen == 4)
 						{
-							CopyMemory (&langD, retbuf, vLen);
+							RtlCopyMemory (&langD, retbuf, vLen);
+
 							_r_str_printf (author_entry, _countof (author_entry), L"\\StringFileInfo\\%02X%02X%02X%02X\\CompanyName", (langD & 0xff00) >> 8, langD & 0xff, (langD & 0xff000000) >> 24, (langD & 0xff0000) >> 16);
 							_r_str_printf (description_entry, _countof (description_entry), L"\\StringFileInfo\\%02X%02X%02X%02X\\FileDescription", (langD & 0xff00) >> 8, langD & 0xff, (langD & 0xff000000) >> 24, (langD & 0xff0000) >> 16);
 						}
@@ -662,7 +597,7 @@ PR_OBJECT _app_getversioninfo (size_t app_hash, PITEM_APP ptr_app)
 						if (VerQueryValue (versionInfo, description_entry, &retbuf, &vLen))
 						{
 							buffer.Append (SZ_TAB);
-							buffer.Append (LPCWSTR (retbuf));
+							buffer.Append (static_cast<LPCWSTR>(retbuf));
 
 							UINT length = 0;
 							VS_FIXEDFILEINFO* verInfo = nullptr;
@@ -788,10 +723,10 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 			return L"vettcp";
 
 		case 79:
+		case 2003:
 			return L"finger";
 
 		case 80:
-		case 8008:
 			return L"http";
 
 		case 81:
@@ -930,6 +865,7 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 			return L"kis";
 
 		case 194:
+		case 529:
 			return L"irc";
 
 		case 195:
@@ -1022,6 +958,9 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 		case 558:
 			return L"sdnskmp";
 
+		case 585:
+			return L"imap4-ssl";
+
 		case 587:
 			return L"submission";
 
@@ -1029,7 +968,7 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 			return L"ipp";
 
 		case 636:
-			return L"ldapssl";
+			return L"ldaps";
 
 		case 646:
 			return L"ldp";
@@ -1052,6 +991,9 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 		case 873:
 			return L"rsync";
 
+		case 853:
+			return L"domain-s";
+
 		case 989:
 			return L"ftps-data";
 
@@ -1064,6 +1006,9 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 		case 993:
 			return L"imaps";
 
+		case 994:
+			return L"ircs";
+
 		case 995:
 			return L"pop3s";
 
@@ -1071,7 +1016,15 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 			return L"ms-lsa";
 
 		case 1110:
-			return L"nfsd-status";
+			return L"nfsd";
+
+		case 1111:
+			return L"lmsocialserver";
+
+		case 1112:
+		case 1114:
+		case 4333:
+			return L"mini-sql";
 
 		case 1119:
 			return L"bnetgame";
@@ -1112,9 +1065,6 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 
 		case 2000:
 			return L"cisco-sccp";
-
-		case 2003:
-			return L"finger";
 
 		case 2054:
 			return L"weblogin";
@@ -1169,6 +1119,9 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 
 		case 3389:
 			return L"ms-wbt-server";
+
+		case 3407:
+			return L"ldap-admin";
 
 		case 3540:
 			return L"pnrp-port";
@@ -1308,20 +1261,20 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 		case 7235:
 			return L"aspcoordination";
 
-		case 8000:
 		case 8443:
 			return L"https-alt";
 
 		case 8021:
 			return L"ftp-proxy";
 
-		case 8080:
-			return L"http-proxy";
-
 		case 8333:
 		case 18333:
 			return L"bitcoin";
 
+		case 591:
+		case 8000:
+		case 8008:
+		case 8080:
 		case 8444:
 			return L"http-alt";
 
@@ -1336,6 +1289,9 @@ rstring _app_getservicename (UINT16 port, LPCWSTR empty_text)
 
 		case 10107:
 			return L"bctp-server";
+
+		case 11371:
+			return L"hkp";
 
 		case 25565:
 			return L"minecraft";
@@ -1492,7 +1448,7 @@ rstring _app_getstatename (DWORD state)
 	return nullptr;
 }
 
-rstring _app_getservicenamefromtag (HANDLE pid, PVOID ptag)
+rstring _app_getservicenamefromtag (HANDLE pid, const PVOID ptag)
 {
 	rstring result;
 	const HMODULE hlib = GetModuleHandle (L"advapi32.dll");
@@ -1505,7 +1461,7 @@ rstring _app_getservicenamefromtag (HANDLE pid, PVOID ptag)
 		if (_I_QueryTagInformation)
 		{
 			SC_SERVICE_TAG_QUERY nameFromTag;
-			SecureZeroMemory (&nameFromTag, sizeof (nameFromTag));
+			RtlSecureZeroMemory (&nameFromTag, sizeof (nameFromTag));
 
 			nameFromTag.ProcessId = HandleToUlong (pid);
 			nameFromTag.ServiceTag = PtrToUlong (ptag);
@@ -1514,7 +1470,7 @@ rstring _app_getservicenamefromtag (HANDLE pid, PVOID ptag)
 
 			if (nameFromTag.Buffer)
 			{
-				result = (LPCWSTR)nameFromTag.Buffer;
+				result = static_cast<LPCWSTR>(nameFromTag.Buffer);
 				LocalFree (nameFromTag.Buffer);
 			}
 		}
@@ -1569,7 +1525,7 @@ rstring _app_getnetworkpath (DWORD pid, ULONG64 * pmodules, PINT picon_id, size_
 		}
 	}
 
-	*phash = proc_name.Hash ();
+	*phash = _r_str_hash (proc_name);
 
 	if (!proc_name.IsEmpty ())
 	{
@@ -1610,10 +1566,10 @@ size_t _app_getnetworkhash (ADDRESS_FAMILY af, DWORD pid, PVOID remote_addr, DWO
 		return 0;
 	}
 
-	return _r_str_hash (_r_fmt (L"%" PRIu8 L"_%" PRId32 L"_%s_%" PRId32 L"_%s_%" PRId32 L"_%" PRIu8 "_%" PRId32, af, pid, remote_addr_str, remote_port, local_addr_str, local_port, proto, state));
+	return _r_str_hash (_r_fmt (L"%" PRIu8 L"_%" PRIu32 L"_%s_%" PRId32 L"_%s_%" PRIu32 L"_%" PRIu8 "_%" PRIu32, af, pid, remote_addr_str, remote_port, local_addr_str, local_port, proto, state));
 }
 
-bool _app_isvalidconnection (ADDRESS_FAMILY af, PVOID paddr)
+bool _app_isvalidconnection (ADDRESS_FAMILY af, const PVOID paddr)
 {
 	if (af == AF_INET)
 	{
@@ -1650,7 +1606,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 
 	if (tableSize)
 	{
-		PMIB_TCPTABLE_OWNER_MODULE tcp4Table = new MIB_TCPTABLE_OWNER_MODULE[tableSize];
+		PMIB_TCPTABLE_OWNER_MODULE tcp4Table = (PMIB_TCPTABLE_OWNER_MODULE)new BYTE[tableSize];
 
 		if (GetExtendedTcpTable (tcp4Table, &tableSize, FALSE, AF_INET, TCP_TABLE_OWNER_MODULE_ALL, 0) == NO_ERROR)
 		{
@@ -1671,7 +1627,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 				}
 
 				PITEM_NETWORK ptr_network = new ITEM_NETWORK;
-				SecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
+				RtlSecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
 
 				const rstring path = _app_getnetworkpath (tcp4Table->table[i].dwOwningPid, tcp4Table->table[i].OwningModuleInfo, &ptr_network->icon_id, &ptr_network->app_hash);
 
@@ -1710,7 +1666,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 
 	if (tableSize)
 	{
-		PMIB_TCP6TABLE_OWNER_MODULE tcp6Table = new MIB_TCP6TABLE_OWNER_MODULE[tableSize];
+		PMIB_TCP6TABLE_OWNER_MODULE tcp6Table = (PMIB_TCP6TABLE_OWNER_MODULE)new BYTE[tableSize];
 
 		if (GetExtendedTcpTable (tcp6Table, &tableSize, FALSE, AF_INET6, TCP_TABLE_OWNER_MODULE_ALL, 0) == NO_ERROR)
 		{
@@ -1725,7 +1681,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 				}
 
 				PITEM_NETWORK ptr_network = new ITEM_NETWORK;
-				SecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
+				RtlSecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
 
 				const rstring path = _app_getnetworkpath (tcp6Table->table[i].dwOwningPid, tcp6Table->table[i].OwningModuleInfo, &ptr_network->icon_id, &ptr_network->app_hash);
 
@@ -1734,10 +1690,10 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 				ptr_network->af = AF_INET6;
 				ptr_network->protocol = IPPROTO_TCP;
 
-				CopyMemory (ptr_network->remote_addr6.u.Byte, tcp6Table->table[i].ucRemoteAddr, FWP_V6_ADDR_SIZE);
+				RtlCopyMemory (ptr_network->remote_addr6.u.Byte, tcp6Table->table[i].ucRemoteAddr, FWP_V6_ADDR_SIZE);
 				ptr_network->remote_port = _byteswap_ushort ((USHORT)tcp6Table->table[i].dwRemotePort);
 
-				CopyMemory (ptr_network->local_addr6.u.Byte, tcp6Table->table[i].ucLocalAddr, FWP_V6_ADDR_SIZE);
+				RtlCopyMemory (ptr_network->local_addr6.u.Byte, tcp6Table->table[i].ucLocalAddr, FWP_V6_ADDR_SIZE);
 				ptr_network->local_port = _byteswap_ushort ((USHORT)tcp6Table->table[i].dwLocalPort);
 
 				ptr_network->state = tcp6Table->table[i].dwState;
@@ -1764,7 +1720,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 
 	if (tableSize)
 	{
-		PMIB_UDPTABLE_OWNER_MODULE udp4Table = new MIB_UDPTABLE_OWNER_MODULE[tableSize];
+		PMIB_UDPTABLE_OWNER_MODULE udp4Table = (PMIB_UDPTABLE_OWNER_MODULE)new BYTE[tableSize];
 
 		if (GetExtendedUdpTable (udp4Table, &tableSize, FALSE, AF_INET, UDP_TABLE_OWNER_MODULE, 0) == NO_ERROR)
 		{
@@ -1782,7 +1738,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 				}
 
 				PITEM_NETWORK ptr_network = new ITEM_NETWORK;
-				SecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
+				RtlSecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
 
 				const rstring path = _app_getnetworkpath (udp4Table->table[i].dwOwningPid, udp4Table->table[i].OwningModuleInfo, &ptr_network->icon_id, &ptr_network->app_hash);
 
@@ -1814,7 +1770,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 
 	if (tableSize)
 	{
-		PMIB_UDP6TABLE_OWNER_MODULE udp6Table = new MIB_UDP6TABLE_OWNER_MODULE[tableSize];
+		PMIB_UDP6TABLE_OWNER_MODULE udp6Table = (PMIB_UDP6TABLE_OWNER_MODULE)new BYTE[tableSize];
 
 		if (GetExtendedUdpTable (udp6Table, &tableSize, FALSE, AF_INET6, UDP_TABLE_OWNER_MODULE, 0) == NO_ERROR)
 		{
@@ -1829,7 +1785,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 				}
 
 				PITEM_NETWORK ptr_network = new ITEM_NETWORK;
-				SecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
+				RtlSecureZeroMemory (ptr_network, sizeof (ITEM_NETWORK));
 
 				const rstring path = _app_getnetworkpath (udp6Table->table[i].dwOwningPid, udp6Table->table[i].OwningModuleInfo, &ptr_network->icon_id, &ptr_network->app_hash);
 
@@ -1838,7 +1794,7 @@ void _app_generate_connections (OBJECTS_MAP& ptr_map, HASHER_MAP& checker_map)
 				ptr_network->af = AF_INET6;
 				ptr_network->protocol = IPPROTO_UDP;
 
-				CopyMemory (ptr_network->local_addr6.u.Byte, udp6Table->table[i].ucLocalAddr, FWP_V6_ADDR_SIZE);
+				RtlCopyMemory (ptr_network->local_addr6.u.Byte, udp6Table->table[i].ucLocalAddr, FWP_V6_ADDR_SIZE);
 				ptr_network->local_port = _byteswap_ushort ((USHORT)udp6Table->table[i].dwLocalPort);
 
 				ptr_network->state = 0;
@@ -1890,7 +1846,7 @@ void _app_generate_packages ()
 			{
 				PBYTE package_sid = _r_reg_querybinary (hsubkey, L"PackageSid");
 
-				if (!package_sid)
+				if (!package_sid || !IsValidSid (package_sid))
 				{
 					RegCloseKey (hsubkey);
 					continue;
@@ -1898,11 +1854,11 @@ void _app_generate_packages ()
 
 				rstring package_sid_string = _r_str_fromsid (package_sid);
 
-				SAFE_DELETE_ARRAY (package_sid);
-
 				if (package_sid_string.IsEmpty ())
 				{
+					SAFE_DELETE_ARRAY (package_sid);
 					RegCloseKey (hsubkey);
+
 					continue;
 				}
 
@@ -1910,7 +1866,9 @@ void _app_generate_packages ()
 
 				if (apps_helper.find (app_hash) != apps_helper.end ())
 				{
+					SAFE_DELETE_ARRAY (package_sid);
 					RegCloseKey (hsubkey);
+
 					continue;
 				}
 
@@ -1920,61 +1878,45 @@ void _app_generate_packages ()
 				{
 					if (display_name.At (0) == L'@')
 					{
-						const HRESULT hrComInit = CoInitialize (nullptr);
+						WCHAR name[MAX_PATH] = {0};
 
-						if ((hrComInit == RPC_E_CHANGED_MODE) || SUCCEEDED (hrComInit))
-						{
-							WCHAR name[MAX_PATH] = {0};
+						if (SUCCEEDED (SHLoadIndirectString (display_name, name, _countof (name), nullptr)))
+							display_name = name;
 
-							if (SUCCEEDED (SHLoadIndirectString (display_name, name, _countof (name), nullptr)))
-								display_name = name;
-
-							else
-								display_name.Release ();
-
-							if (SUCCEEDED (hrComInit))
-								CoUninitialize ();
-						}
+						else
+							display_name.Release ();
 					}
 				}
 
+				RegCloseKey (hsubkey);
+
 				if (display_name.IsEmpty ())
 				{
-					RegCloseKey (hsubkey);
+					SAFE_DELETE_ARRAY (package_sid);
 					continue;
 				}
 
 				PITEM_APP_HELPER ptr_item = new ITEM_APP_HELPER;
-
-				SecureZeroMemory (ptr_item, sizeof (ITEM_APP_HELPER));
+				RtlSecureZeroMemory (ptr_item, sizeof (ITEM_APP_HELPER));
 
 				ptr_item->type = DataAppUWP;
+				ptr_item->pdata = package_sid;
 
 				rstring path = _r_reg_querystring (hsubkey, L"PackageRootFolder");
 
 				// query timestamp
 				ptr_item->timestamp = _r_reg_querytimestamp (hsubkey);
 
-				if (!display_name.IsEmpty ())
-					_r_str_alloc (&ptr_item->display_name, _r_str_length (display_name), display_name);
-
 				if (!path.IsEmpty ())
 					_r_str_alloc (&ptr_item->real_path, path.GetLength (), path);
 
+				_r_str_alloc (&ptr_item->display_name, display_name.GetLength (), display_name);
 				_r_str_alloc (&ptr_item->internal_name, package_sid_string.GetLength (), package_sid_string);
 
-				if (!ConvertStringSidToSid (package_sid_string, &ptr_item->pdata))
-				{
-					SAFE_DELETE (ptr_item);
-				}
-				else
-				{
-					_app_load_appxmanifest (ptr_item);
+				// load additional info from appx manifest
+				_app_load_appxmanifest (ptr_item);
 
-					apps_helper[app_hash] = _r_obj_allocate (ptr_item, &_app_dereferenceappshelper);
-				}
-
-				RegCloseKey (hsubkey);
+				apps_helper[app_hash] = _r_obj_allocate (ptr_item, &_app_dereferenceappshelper);
 			}
 		}
 
@@ -2114,30 +2056,39 @@ void _app_generate_services ()
 
 			if (serviceSid && !sidstring.IsEmpty ())
 			{
-				PITEM_APP_HELPER ptr_item = new ITEM_APP_HELPER;
+				PVOID pservice_sd = nullptr;
+				size_t sd_length = 0;
 
-				SecureZeroMemory (ptr_item, sizeof (ITEM_APP_HELPER));
+				if (ConvertStringSecurityDescriptorToSecurityDescriptor (_r_fmt (SERVICE_SECURITY_DESCRIPTOR, sidstring.GetString ()), SDDL_REVISION_1, &pservice_sd, nullptr))
+				{
+					if (IsValidSecurityDescriptor (pservice_sd))
+						sd_length = GetSecurityDescriptorLength (pservice_sd);
+
+					else
+						SAFE_LOCAL_FREE (pservice_sd);
+				}
+
+				if (!pservice_sd)
+					continue;
+
+				PITEM_APP_HELPER ptr_item = new ITEM_APP_HELPER;
+				RtlSecureZeroMemory (ptr_item, sizeof (ITEM_APP_HELPER));
 
 				ptr_item->type = DataAppService;
 				ptr_item->timestamp = timestamp;
 
 				_r_str_alloc (&ptr_item->display_name, _r_str_length (display_name), display_name);
-				_r_str_alloc (&ptr_item->real_path, _r_str_length (real_path), real_path);
+				_r_str_alloc (&ptr_item->real_path, real_path.GetLength (), real_path);
 				_r_str_alloc (&ptr_item->internal_name, _r_str_length (service_name), service_name);
 
 				_r_str_toupper (sidstring.GetBuffer ());
 
-				if (
-					!ConvertStringSecurityDescriptorToSecurityDescriptor (_r_fmt (SERVICE_SECURITY_DESCRIPTOR, sidstring.GetString ()), SDDL_REVISION_1, &ptr_item->pdata, nullptr) ||
-					!IsValidSecurityDescriptor (ptr_item->pdata)
-					)
-				{
-					SAFE_DELETE (ptr_item);
-				}
-				else
-				{
-					apps_helper[app_hash] = _r_obj_allocate (ptr_item, &_app_dereferenceappshelper);
-				}
+				ptr_item->pdata = new BYTE[sd_length];
+				memcpy (ptr_item->pdata, pservice_sd, sd_length);
+
+				SAFE_LOCAL_FREE (pservice_sd);
+
+				apps_helper[app_hash] = _r_obj_allocate (ptr_item, &_app_dereferenceappshelper);
 			}
 
 			SAFE_DELETE_ARRAY (serviceSid);
@@ -2152,7 +2103,7 @@ void _app_generate_services ()
 void _app_generate_rulesmenu (HMENU hsubmenu, size_t app_hash)
 {
 	ITEM_COUNT stat = {0};
-	SecureZeroMemory (&stat, sizeof (stat));
+	RtlSecureZeroMemory (&stat, sizeof (stat));
 
 	_app_getcount (&stat);
 
@@ -2276,25 +2227,11 @@ bool _app_item_get (EnumDataType type, size_t app_hash, rstring* display_name, r
 
 			if (lpdata)
 			{
-				SAFE_DELETE_ARRAY (*lpdata);
-
 				if (ptr_app_item->pdata)
-				{
-					DWORD length = 0;
+					*lpdata = ptr_app_item->pdata;
 
-					if (type == DataAppService)
-						length = GetSecurityDescriptorLength (ptr_app_item->pdata);
-
-					else if (type == DataAppUWP)
-						length = SECURITY_MAX_SID_SIZE;
-
-					if (length)
-					{
-						*lpdata = new BYTE[length];
-
-						memcpy (*lpdata, ptr_app_item->pdata, length);
-					}
-				}
+				else
+					*lpdata = nullptr;
 			}
 
 			if (ptime)
@@ -2322,14 +2259,14 @@ INT CALLBACK _app_listviewcompare_callback (LPARAM lparam1, LPARAM lparam2, LPAR
 	if (item1 == INVALID_INT || item2 == INVALID_INT)
 		return 0;
 
-	const rstring cfg_name = _r_fmt (L"listview\\%04x", listview_id);
+	const rstring cfg_name = _r_fmt (L"listview\\%04" PRIX32, listview_id);
 
 	const INT column_id = app.ConfigGet (L"SortColumn", 0, cfg_name).AsInt ();
 	const bool is_descend = app.ConfigGet (L"SortIsDescending", false, cfg_name).AsBool ();
 
 	INT result = 0;
 
-	if ((SendMessage (hlistview, LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0) & LVS_EX_CHECKBOXES) == LVS_EX_CHECKBOXES)
+	if ((SendMessage (hlistview, LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0) & LVS_EX_CHECKBOXES) != 0)
 	{
 		const bool is_checked1 = _r_listview_isitemchecked (hparent, listview_id, item1);
 		const bool is_checked2 = _r_listview_isitemchecked (hparent, listview_id, item2);
@@ -2379,9 +2316,12 @@ void _app_listviewsort (HWND hwnd, INT listview_id, INT column_id, bool is_notif
 	if (!listview_id)
 		return;
 
-	const rstring cfg_name = _r_fmt (L"listview\\%04x", listview_id);
 	const INT column_count = _r_listview_getcolumncount (hwnd, listview_id);
 
+	if (!column_count)
+		return;
+
+	const rstring cfg_name = _r_fmt (L"listview\\%04" PRIX32, listview_id);
 	bool is_descend = app.ConfigGet (L"SortIsDescending", false, cfg_name).AsBool ();
 
 	if (is_notifycode)
@@ -2406,10 +2346,10 @@ void _app_listviewsort (HWND hwnd, INT listview_id, INT column_id, bool is_notif
 	SendDlgItemMessage (hwnd, listview_id, LVM_SORTITEMS, (WPARAM)GetDlgItem (hwnd, listview_id), (LPARAM)&_app_listviewcompare_callback);
 }
 
-void _app_refreshstatus (HWND hwnd, bool is_groups)
+void _app_refreshstatus (HWND hwnd, INT listview_id)
 {
 	ITEM_COUNT stat = {0};
-	SecureZeroMemory (&stat, sizeof (stat));
+	RtlSecureZeroMemory (&stat, sizeof (stat));
 
 	_app_getcount (&stat);
 
@@ -2433,12 +2373,6 @@ void _app_refreshstatus (HWND hwnd, bool is_groups)
 		{
 			switch (i)
 			{
-				case 0:
-				{
-					text[i] = app.LocaleString (_wfp_isfiltersinstalled () ? IDS_STATUS_FILTERS_ACTIVE : IDS_STATUS_FILTERS_INACTIVE, nullptr);
-					break;
-				}
-
 				case 1:
 				{
 					text[i].Format (L"%s: %" PR_SIZE_T, app.LocaleString (IDS_STATUS_UNUSED_APPS, nullptr).GetString (), stat.apps_unused_count);
@@ -2452,72 +2386,71 @@ void _app_refreshstatus (HWND hwnd, bool is_groups)
 				}
 			}
 
-			size[i] = _r_dc_fontwidth (hdc, text[i], text[i].GetLength ()) + spacing;
-
 			if (i)
+			{
+				size[i] = _r_dc_fontwidth (hdc, text[i], text[i].GetLength ()) + spacing;
 				lay += size[i];
+			}
 		}
 
-		RECT rc = {0};
-		GetClientRect (hstatus, &rc);
+		RECT rc_client = {0};
+		GetClientRect (hstatus, &rc_client);
 
-		parts[0] = _R_RECT_WIDTH (&rc) - lay - GetSystemMetrics (SM_CXVSCROLL) - (GetSystemMetrics (SM_CXBORDER) * 2);
+		parts[0] = _R_RECT_WIDTH (&rc_client) - lay - _r_dc_getsystemmetrics (hwnd, SM_CXVSCROLL) - (_r_dc_getsystemmetrics (hwnd, SM_CXBORDER) * 2);
 		parts[1] = parts[0] + size[1];
 		parts[2] = parts[1] + size[2];
 
 		SendMessage (hstatus, SB_SETPARTS, parts_count, (LPARAM)parts);
 
-		for (INT i = 0; i < parts_count; i++)
-			_r_status_settext (hwnd, IDC_STATUSBAR, i, text[i], text[i]);
+		for (INT i = 1; i < parts_count; i++)
+			_r_status_settext (hwnd, IDC_STATUSBAR, i, text[i]);
 
 		ReleaseDC (hstatus, hdc);
 	}
 
 	// group information
-	if (is_groups)
+	if (listview_id)
 	{
-		const INT listview_id = _app_gettab_id (hwnd);
+		if (listview_id == INVALID_INT)
+			listview_id = _app_gettab_id (hwnd);
 
-		if (listview_id)
+		if ((SendDlgItemMessage (hwnd, listview_id, LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0) & LVS_EX_CHECKBOXES) != 0)
 		{
-			if ((SendDlgItemMessage (hwnd, listview_id, LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0) & LVS_EX_CHECKBOXES) == LVS_EX_CHECKBOXES)
+			const bool is_rules_lv = (listview_id >= IDC_RULES_BLOCKLIST && listview_id <= IDC_RULES_CUSTOM);
+
+			const UINT enabled_group_title = is_rules_lv ? IDS_GROUP_ENABLED : IDS_GROUP_ALLOWED;
+			const UINT special_group_title = is_rules_lv ? IDS_GROUP_SPECIAL : IDS_GROUP_SPECIAL_APPS;
+			const UINT disabled_group_title = is_rules_lv ? IDS_GROUP_DISABLED : IDS_GROUP_BLOCKED;
+
+			const INT total_count = _r_listview_getitemcount (hwnd, listview_id);
+
+			INT group1_count = 0;
+			INT group2_count = 0;
+			INT group3_count = 0;
+
+			for (INT i = 0; i < total_count; i++)
 			{
-				const bool is_rules_lv = (listview_id >= IDC_RULES_BLOCKLIST && listview_id <= IDC_RULES_CUSTOM);
+				LVITEM lvi = {0};
 
-				const UINT enabled_group_title = is_rules_lv ? IDS_GROUP_ENABLED : IDS_GROUP_ALLOWED;
-				const UINT special_group_title = is_rules_lv ? IDS_GROUP_SPECIAL : IDS_GROUP_SPECIAL_APPS;
-				const UINT disabled_group_title = is_rules_lv ? IDS_GROUP_DISABLED : IDS_GROUP_BLOCKED;
+				lvi.mask = LVIF_GROUPID;
+				lvi.iItem = i;
 
-				const INT total_count = _r_listview_getitemcount (hwnd, listview_id);
-
-				INT group1_count = 0;
-				INT group2_count = 0;
-				INT group3_count = 0;
-
-				for (INT i = 0; i < total_count; i++)
+				if (SendDlgItemMessage (hwnd, listview_id, LVM_GETITEM, 0, (LPARAM)&lvi))
 				{
-					LVITEM lvi = {0};
+					if (lvi.iGroupId == 0)
+						group1_count += 1;
 
-					lvi.mask = LVIF_GROUPID;
-					lvi.iItem = i;
+					else if (lvi.iGroupId == 1)
+						group2_count += 1;
 
-					if (SendDlgItemMessage (hwnd, listview_id, LVM_GETITEM, 0, (LPARAM)&lvi))
-					{
-						if (lvi.iGroupId == 0)
-							group1_count += 1;
-
-						else if (lvi.iGroupId == 1)
-							group2_count += 1;
-
-						else
-							group3_count += 1;
-					}
+					else
+						group3_count += 1;
 				}
-
-				_r_listview_setgroup (hwnd, listview_id, 0, app.LocaleString (enabled_group_title, total_count ? _r_fmt (L" (%d/%d)", group1_count, total_count).GetString () : nullptr), 0, 0);
-				_r_listview_setgroup (hwnd, listview_id, 1, app.LocaleString (special_group_title, total_count ? _r_fmt (L" (%d/%d)", group2_count, total_count).GetString () : nullptr), 0, 0);
-				_r_listview_setgroup (hwnd, listview_id, 2, app.LocaleString (disabled_group_title, total_count ? _r_fmt (L" (%d/%d)", group3_count, total_count).GetString () : nullptr), 0, 0);
 			}
+
+			_r_listview_setgroup (hwnd, listview_id, 0, app.LocaleString (enabled_group_title, total_count ? _r_fmt (L" (%d/%d)", group1_count, total_count).GetString () : nullptr), 0, 0);
+			_r_listview_setgroup (hwnd, listview_id, 1, app.LocaleString (special_group_title, total_count ? _r_fmt (L" (%d/%d)", group2_count, total_count).GetString () : nullptr), 0, 0);
+			_r_listview_setgroup (hwnd, listview_id, 2, app.LocaleString (disabled_group_title, total_count ? _r_fmt (L" (%d/%d)", group3_count, total_count).GetString () : nullptr), 0, 0);
 		}
 	}
 }
@@ -2534,10 +2467,9 @@ rstring _app_parsehostaddress_dns (LPCWSTR hostname, USHORT port)
 	// ipv4 address
 	DNS_STATUS dnsStatus = DnsQuery (hostname, DNS_TYPE_A, DNS_QUERY_NO_HOSTS_FILE, nullptr, &ppQueryResultsSet, nullptr);
 
-	if (dnsStatus != DNS_ERROR_RCODE_NO_ERROR)
+	if (dnsStatus != DNS_ERROR_RCODE_NO_ERROR && dnsStatus != DNS_INFO_NO_RECORDS)
 	{
-		if (dnsStatus != DNS_INFO_NO_RECORDS)
-			_app_logerror (L"DnsQuery (DNS_TYPE_A)", dnsStatus, hostname, true);
+		app.LogError (L"DnsQuery (DNS_TYPE_A)", dnsStatus, hostname, 0);
 	}
 	else
 	{
@@ -2566,10 +2498,9 @@ rstring _app_parsehostaddress_dns (LPCWSTR hostname, USHORT port)
 	// ipv6 address
 	dnsStatus = DnsQuery (hostname, DNS_TYPE_AAAA, DNS_QUERY_NO_HOSTS_FILE, nullptr, &ppQueryResultsSet, nullptr);
 
-	if (dnsStatus != DNS_ERROR_RCODE_NO_ERROR)
+	if (dnsStatus != DNS_ERROR_RCODE_NO_ERROR && dnsStatus != DNS_INFO_NO_RECORDS)
 	{
-		if (dnsStatus != DNS_INFO_NO_RECORDS)
-			_app_logerror (L"DnsQuery (DNS_TYPE_AAAA)", dnsStatus, hostname, true);
+		app.LogError (L"DnsQuery (DNS_TYPE_AAAA)", dnsStatus, hostname, 0);
 	}
 	else
 	{
@@ -2609,7 +2540,7 @@ rstring _app_parsehostaddress_wsa (LPCWSTR hostname, USHORT port)
 
 	if (rc != ERROR_SUCCESS)
 	{
-		_app_logerror (L"WSAStartup", rc, nullptr, true);
+		app.LogError (L"WSAStartup", rc, nullptr, 0);
 		return nullptr;
 	}
 
@@ -2627,7 +2558,7 @@ rstring _app_parsehostaddress_wsa (LPCWSTR hostname, USHORT port)
 
 	if (rc != ERROR_SUCCESS || !ppQueryResultsSet)
 	{
-		_app_logerror (L"GetAddrInfoEx", rc, hostname, true);
+		app.LogError (L"GetAddrInfoEx", rc, hostname, 0);
 		return nullptr;
 	}
 	else
@@ -2681,7 +2612,7 @@ rstring _app_parsehostaddress_wsa (LPCWSTR hostname, USHORT port)
 bool _app_parsenetworkstring (LPCWSTR network_string, NET_ADDRESS_FORMAT * format_ptr, USHORT * port_ptr, FWP_V4_ADDR_AND_MASK * paddr4, FWP_V6_ADDR_AND_MASK * paddr6, LPWSTR paddr_dns, size_t dns_length)
 {
 	NET_ADDRESS_INFO ni;
-	SecureZeroMemory (&ni, sizeof (ni));
+	RtlSecureZeroMemory (&ni, sizeof (ni));
 
 	USHORT port = 0;
 	BYTE prefix_length = 0;
@@ -2691,7 +2622,7 @@ bool _app_parsenetworkstring (LPCWSTR network_string, NET_ADDRESS_FORMAT * forma
 
 	if (rc != ERROR_SUCCESS)
 	{
-		_app_logerror (L"ParseNetworkString", rc, network_string, true);
+		app.LogError (L"ParseNetworkString", rc, network_string, 0);
 		return false;
 	}
 	else
@@ -2719,7 +2650,7 @@ bool _app_parsenetworkstring (LPCWSTR network_string, NET_ADDRESS_FORMAT * forma
 		{
 			if (paddr6)
 			{
-				CopyMemory (paddr6->addr, ni.Ipv6Address.sin6_addr.u.Byte, FWP_V6_ADDR_SIZE);
+				RtlCopyMemory (paddr6->addr, ni.Ipv6Address.sin6_addr.u.Byte, FWP_V6_ADDR_SIZE);
 				paddr6->prefixLength = min (prefix_length, 128);
 			}
 
@@ -2749,7 +2680,7 @@ bool _app_parsenetworkstring (LPCWSTR network_string, NET_ADDRESS_FORMAT * forma
 						_r_obj_dereference (ptr_cache_object);
 					}
 
-					return *paddr_dns;
+					return !_r_str_isempty (paddr_dns);
 				}
 
 				rstring host = _app_parsehostaddress_dns (ni.NamedAddress.Address, port);
@@ -2773,8 +2704,6 @@ bool _app_parsenetworkstring (LPCWSTR network_string, NET_ADDRESS_FORMAT * forma
 
 						_app_freeobjects_map (cache_dns, false);
 						cache_dns[dns_hash] = _r_obj_allocate (ptr_cache, &_app_dereferencestring);
-
-						_r_obj_reference (cache_dns[dns_hash]);
 
 						_r_fastlock_releaseexclusive (&lock_cache);
 					}
@@ -2812,7 +2741,7 @@ bool _app_parserulestring (rstring rule, PITEM_ADDRESS ptr_addr)
 
 	// auto-parse rule type
 	{
-		const size_t rule_hash = rule.Hash ();
+		const size_t rule_hash = _r_str_hash (rule);
 
 		_r_fastlock_acquireshared (&lock_cache);
 		const bool is_exists = cache_types.find (rule_hash) != cache_types.end ();
@@ -2918,7 +2847,7 @@ bool _app_parserulestring (rstring rule, PITEM_ADDRESS ptr_addr)
 					if (ptr_addr->prange)
 					{
 						ptr_addr->prange->valueLow.type = FWP_BYTE_ARRAY16_TYPE;
-						CopyMemory (ptr_addr->prange->valueLow.byteArray16->byteArray16, addr6.addr, FWP_V6_ADDR_SIZE);
+						RtlCopyMemory (ptr_addr->prange->valueLow.byteArray16->byteArray16, addr6.addr, FWP_V6_ADDR_SIZE);
 					}
 				}
 				else
@@ -2950,7 +2879,7 @@ bool _app_parserulestring (rstring rule, PITEM_ADDRESS ptr_addr)
 					if (ptr_addr->prange)
 					{
 						ptr_addr->prange->valueHigh.type = FWP_BYTE_ARRAY16_TYPE;
-						CopyMemory (ptr_addr->prange->valueHigh.byteArray16->byteArray16, addr6.addr, FWP_V6_ADDR_SIZE);
+						RtlCopyMemory (ptr_addr->prange->valueHigh.byteArray16->byteArray16, addr6.addr, FWP_V6_ADDR_SIZE);
 					}
 				}
 				else
@@ -2984,7 +2913,7 @@ bool _app_parserulestring (rstring rule, PITEM_ADDRESS ptr_addr)
 					if (ptr_addr->paddr6)
 					{
 						ptr_addr->paddr6->prefixLength = addr6.prefixLength;
-						CopyMemory (ptr_addr->paddr6->addr, addr6.addr, FWP_V6_ADDR_SIZE);
+						RtlCopyMemory (ptr_addr->paddr6->addr, addr6.addr, FWP_V6_ADDR_SIZE);
 					}
 				}
 				else if (format == NET_ADDRESS_DNS_NAME)
@@ -3024,7 +2953,7 @@ bool _app_resolveaddress (ADDRESS_FAMILY af, LPVOID paddr, LPWSTR * pbuffer)
 	LPWSTR pstraddr = nullptr;
 	_app_formataddress (af, 0, paddr, 0, &pstraddr, FMTADDR_AS_ARPA);
 
-	if (pstraddr)
+	if (!_r_str_isempty (pstraddr))
 	{
 		const size_t arpa_hash = _r_str_hash (pstraddr);
 
@@ -3071,8 +3000,6 @@ bool _app_resolveaddress (ADDRESS_FAMILY af, LPVOID paddr, LPWSTR * pbuffer)
 
 							_app_freeobjects_map (cache_arpa, false);
 							cache_arpa[arpa_hash] = _r_obj_allocate (ptr_cache, &_app_dereferencestring);
-
-							_r_obj_reference (cache_arpa[arpa_hash]);
 
 							_r_fastlock_releaseexclusive (&lock_cache);
 						}
@@ -3142,14 +3069,14 @@ void _app_showitem (HWND hwnd, INT listview_id, INT item, INT scroll_pos)
 	{
 		item = std::clamp (item, 0, total_count - 1);
 
-		SendMessage (hlistview, LVM_ENSUREVISIBLE, (WPARAM)item, TRUE); // ensure item visible
+		PostMessage (hlistview, LVM_ENSUREVISIBLE, (WPARAM)item, TRUE); // ensure item visible
 
 		ListView_SetItemState (hlistview, INVALID_INT, 0, LVIS_SELECTED | LVIS_FOCUSED); // deselect all
 		ListView_SetItemState (hlistview, (WPARAM)item, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED); // select item
 	}
 
 	if (scroll_pos > 0)
-		SendMessage (hlistview, LVM_SCROLL, 0, (LPARAM)scroll_pos); // restore scroll position
+		PostMessage (hlistview, LVM_SCROLL, 0, (LPARAM)scroll_pos); // restore scroll position
 }
 
 HBITMAP _app_bitmapfromico (HICON hicon, INT icon_size)
@@ -3167,7 +3094,7 @@ HBITMAP _app_bitmapfromico (HICON hicon, INT icon_size)
 
 	if (screenHdc)
 	{
-		const HDC hdc = CreateCompatibleDC (screenHdc);
+		HDC hdc = CreateCompatibleDC (screenHdc);
 
 		if (hdc)
 		{
@@ -3214,7 +3141,7 @@ HBITMAP _app_bitmapfromico (HICON hicon, INT icon_size)
 				SelectObject (hdc, oldBitmap);
 			}
 
-			DeleteDC (hdc);
+			SAFE_DELETE_DC (hdc);
 		}
 
 		ReleaseDC (nullptr, screenHdc);
@@ -3243,17 +3170,12 @@ HBITMAP _app_bitmapfrompng (HINSTANCE hinst, LPCWSTR name, INT icon_size)
 	WICPixelFormatGUID pixelFormat;
 	WICRect rect = {0, 0, icon_size, icon_size};
 
-	const HRESULT hrComInit = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
-
-	if (FAILED (hrComInit) && (hrComInit != RPC_E_CHANGED_MODE))
-		goto DoExit;
-
 	// Create the ImagingFactory
 	if (FAILED (CoCreateInstance (CLSID_WICImagingFactory1, nullptr, CLSCTX_INPROC_SERVER, IID_IWICImagingFactory, (LPVOID*)&wicFactory)))
 		goto DoExit;
 
 	// Load the resource
-	WICInProcPointer resourceBuffer = (WICInProcPointer)_app_loadresource (hinst, name, L"PNG", &resourceLength);
+	WICInProcPointer resourceBuffer = (WICInProcPointer)_r_loadresource (hinst, name, L"PNG", &resourceLength);
 
 	if (!resourceBuffer)
 		goto DoExit;
@@ -3285,7 +3207,7 @@ HBITMAP _app_bitmapfrompng (HINSTANCE hinst, LPCWSTR name, INT icon_size)
 		goto DoExit;
 
 	// Check if the image format is supported:
-	if (memcmp (&pixelFormat, &GUID_WICPixelFormat32bppPRGBA, sizeof (GUID)) == 0)
+	if (RtlEqualMemory (&pixelFormat, &GUID_WICPixelFormat32bppPRGBA, sizeof (GUID)))
 	{
 		wicBitmapSource = (IWICBitmapSource*)wicFrame;
 	}
@@ -3346,8 +3268,7 @@ DoExit:
 	if (wicScaler)
 		wicScaler->Release ();
 
-	if (hdc)
-		DeleteDC (hdc);
+	SAFE_DELETE_DC (hdc);
 
 	if (screenHdc)
 		ReleaseDC (nullptr, screenHdc);
@@ -3363,9 +3284,6 @@ DoExit:
 
 	if (wicFactory)
 		wicFactory->Release ();
-
-	if (SUCCEEDED (hrComInit))
-		CoUninitialize ();
 
 	if (!success)
 	{
@@ -3429,32 +3347,3 @@ DoOpen:
 	_r_str_alloc (&ptr_app_item->real_path, result.GetLength (), result.GetString ());
 }
 
-LPVOID _app_loadresource (HINSTANCE hinst, LPCWSTR res, LPCWSTR type, PDWORD psize)
-{
-	HRSRC hres = FindResource (hinst, res, type);
-
-	if (hres)
-	{
-		HGLOBAL hloaded = LoadResource (hinst, hres);
-
-		if (hloaded)
-		{
-			LPVOID pLockedResource = LockResource (hloaded);
-
-			if (pLockedResource)
-			{
-				DWORD dwResourceSize = SizeofResource (hinst, hres);
-
-				if (dwResourceSize != 0)
-				{
-					if (psize)
-						*psize = dwResourceSize;
-
-					return pLockedResource;
-				}
-			}
-		}
-	}
-
-	return nullptr;
-}

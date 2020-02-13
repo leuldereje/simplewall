@@ -1,5 +1,5 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #pragma once
 
@@ -25,19 +25,18 @@ void _app_restoreinterfacestate (HWND hwnd, bool is_enabled);
 void _app_setinterfacestate (HWND hwnd);
 
 bool _app_formataddress (ADDRESS_FAMILY af, UINT8 proto, const PVOID ptr_addr, UINT16 port, LPWSTR* ptr_dest, DWORD flags);
-rstring _app_formatport (UINT16 port, LPCWSTR empty_text);
+rstring _app_formatport (UINT16 port, bool is_noempty);
 
 void _app_freeobjects_map (OBJECTS_MAP& ptr_map, bool is_forced);
 void _app_freeobjects_vec (OBJECTS_VEC& ptr_vec);
 void _app_freethreadpool (THREADS_VEC* ptr_pool);
 void _app_freelogstack ();
 
-void _app_getappicon (ITEM_APP* ptr_app, bool is_small, PINT picon_id, HICON* picon);
+void _app_getappicon (const PITEM_APP ptr_app, bool is_small, PINT picon_id, HICON* picon);
 void _app_getdisplayname (size_t app_hash, ITEM_APP* ptr_app, LPWSTR* extracted_name);
 bool _app_getfileicon (LPCWSTR path, bool is_small, PINT picon_id, HICON* picon);
-rstring _app_getshortcutpath (HWND hwnd, LPCWSTR path);
-PR_OBJECT _app_getsignatureinfo (size_t app_hash, PITEM_APP ptr_app);
-PR_OBJECT _app_getversioninfo (size_t app_hash, PITEM_APP ptr_app);
+PR_OBJECT _app_getsignatureinfo (size_t app_hash, const PITEM_APP ptr_app);
+PR_OBJECT _app_getversioninfo (size_t app_hash, const PITEM_APP ptr_app);
 rstring _app_getservicename (UINT16 port, LPCWSTR empty_text);
 rstring _app_getprotoname (UINT8 proto, ADDRESS_FAMILY af);
 rstring _app_getstatename (DWORD state);
@@ -53,7 +52,7 @@ bool _app_item_get (EnumDataType type, size_t app_hash, rstring* display_name, r
 INT CALLBACK _app_listviewcompare_callback (LPARAM lparam1, LPARAM lparam2, LPARAM lparam);
 void _app_listviewsort (HWND hwnd, INT listview_id, INT column_id = INVALID_INT, bool is_notifycode = false);
 
-void _app_refreshstatus (HWND hwnd, bool is_groups = true);
+void _app_refreshstatus (HWND hwnd, INT listview_id = INVALID_INT);
 
 rstring _app_parsehostaddress_dns (LPCWSTR hostname, USHORT port);
 rstring _app_parsehostaddress_wsa (LPCWSTR hostname, USHORT port);
@@ -72,4 +71,3 @@ HBITMAP _app_bitmapfromico (HICON hicon, INT icon_size);
 HBITMAP _app_bitmapfrompng (HINSTANCE hinst, LPCWSTR name, INT icon_size);
 
 void _app_load_appxmanifest (PITEM_APP_HELPER ptr_app_item);
-LPVOID _app_loadresource (HINSTANCE hinst, LPCWSTR res, LPCWSTR type, PDWORD psize);

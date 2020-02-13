@@ -1,12 +1,12 @@
 // simplewall
-// Copyright (c) 2016-2019 Henry++
+// Copyright (c) 2016-2020 Henry++
 
 #pragma once
 
 bool _app_getappinfo (size_t app_hash, EnumInfo info_key, LPVOID presult, size_t size);
 bool _app_setappinfo (size_t app_hash, EnumInfo info_key, LONG_PTR info_value);
 
-size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t timer, time_t last_notify, bool is_silent, bool is_enabled, bool is_fromdb);
+size_t _app_addapplication (HWND hwnd, LPCWSTR path, time_t timestamp, time_t timer, time_t last_notify, bool is_silent, bool is_enabled);
 
 PR_OBJECT _app_getappitem (size_t app_hash);
 PR_OBJECT _app_getrulebyid (size_t idx);
@@ -18,9 +18,9 @@ void _app_freeapplication (size_t app_hash);
 
 void _app_getcount (PITEM_STATUS ptr_status);
 
-INT _app_getappgroup (size_t app_hash, PITEM_APP const ptr_app);
-INT _app_getrulegroup (PITEM_RULE const ptr_rule);
-INT _app_getruleicon (PITEM_RULE const ptr_rule);
+INT _app_getappgroup (size_t app_hash, const PITEM_APP ptr_app);
+INT _app_getrulegroup (const PITEM_RULE ptr_rule);
+INT _app_getruleicon (const PITEM_RULE ptr_rule);
 
 rstring _app_gettooltip (INT listview_id, size_t lparam);
 
@@ -34,14 +34,14 @@ bool _app_ruleblocklistsetchange (PITEM_RULE ptr_rule, INT new_state);
 bool _app_ruleblocklistsetstate (PITEM_RULE ptr_rule, INT spy_state, INT update_state, INT extra_state);
 void _app_ruleblocklistset (HWND hwnd, INT spy_state, INT update_state, INT extra_state, bool is_instantapply);
 
-rstring _app_rulesexpandapps (PITEM_RULE const ptr_rule, bool is_fordisplay, LPCWSTR delimeter);
+rstring _app_rulesexpandapps (const PITEM_RULE ptr_rule, bool is_fordisplay, LPCWSTR delimeter);
 
 bool _app_isappfound (size_t app_hash);
 bool _app_isapphaveconnection (size_t app_hash);
 bool _app_isapphavedrive (INT letter);
 bool _app_isapphaverule (size_t app_hash);
-bool _app_isappused (PITEM_APP const ptr_app, size_t app_hash);
-bool _app_isappexists (PITEM_APP const ptr_app);
+bool _app_isappused (const PITEM_APP ptr_app, size_t app_hash);
+bool _app_isappexists (const PITEM_APP ptr_app);
 
 //bool _app_isruleblocklist (LPCWSTR name);
 bool _app_isrulehost (LPCWSTR rule);
